@@ -1,5 +1,30 @@
-# Worktrees for isolated agent work — do not commit
-.worktrees/
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# uv / venv
+.venv/
+.python-version.local
+
+# env
+.env
+.env.local
 
 # OS
 .DS_Store
+
+# Editors
+.vscode/
+.idea/
+
+# Worktrees (kept from bootstrap commit; do not commit worktree trees)
+.worktrees/
+
+# Harness state (must never land in repo)
+/.pi-harness-local/
