@@ -1,0 +1,24 @@
+[documentation]
+note = "This TOML is a human-readable mirror of pi_harness.clawteam_profile.build_profile_specs(config). Profiles are actually registered with `clawteam profile set`. Regenerate via the snippet in docs/README-FOUNDATION.md."
+
+[role_profile_map]
+orchestrator = "pi-openai-reasoning"
+reviewer = "pi-openai-reasoning"
+builder = "pi-openai-fast"
+scout = "pi-openai-fast"
+
+[[profiles]]
+name = "pi-openai-reasoning"
+agent = "codex"
+model = "gpt-5"
+api_key_env = "OPENAI_API_KEY"
+tier = "reasoning"
+description = "Pi-Agent Harness reasoning tier — used by orchestrator + reviewer roles."
+
+[[profiles]]
+name = "pi-openai-fast"
+agent = "codex"
+model = "gpt-5-mini"
+api_key_env = "OPENAI_API_KEY"
+tier = "fast"
+description = "Pi-Agent Harness fast tier — used by builder + scout roles."
