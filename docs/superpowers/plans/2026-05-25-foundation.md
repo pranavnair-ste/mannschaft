@@ -609,7 +609,7 @@ ClawTeam profiles are single (agent CLI, model, provider) tuples registered via 
   - ``pi-openai-reasoning`` — heavier tier; mapped to orchestrator + reviewer
   - ``pi-openai-fast``       — cheap tier; mapped to builder + scout
 
-  Per-role profile assignment lives in the team template (see Plan 7). This
+  Per-role profile assignment lives in the team template (see Plan 5). This
   module just owns the spec data + a regenerable documentation TOML committed at
   ``profiles/pi-openai.toml``.
   """
@@ -1591,9 +1591,10 @@ It runs only under `pytest -m smoke` so unit runs stay fast and free.
   | `pi-openai-reasoning`  | `gpt-5`       | orchestrator, reviewer         |
   | `pi-openai-fast`       | `gpt-5-mini`  | builder, scout                 |
 
-  Per-agent profile assignment lives in the team template (Plan 7 emits team templates that
-  reference these names). The committed `profiles/pi-openai.toml` is a regenerable
-  human-readable mirror of the spec list — useful for diffs, not consumed by ClawTeam.
+  Per-agent profile assignment lives in the team template (Plan 5 — topology — emits
+  team templates that reference these names). The committed `profiles/pi-openai.toml`
+  is a regenerable human-readable mirror of the spec list — useful for diffs, not
+  consumed by ClawTeam.
 
   Regenerate it:
 
@@ -1611,16 +1612,19 @@ It runs only under `pytest -m smoke` so unit runs stay fast and free.
   | Symbol                                                  | Used by Plans |
   | ------------------------------------------------------- | ------------- |
   | `pi_harness.config.Config`, `load_config`               | all           |
-  | `pi_harness.clawteam.ClawTeamClient`                    | 2, 5, 7       |
-  | `pi_harness.clawteam_profile.build_profile_specs`       | 5, 7          |
-  | `pi_harness.clawteam_profile.ROLE_PROFILE_MAP`          | 7             |
+  | `pi_harness.clawteam.ClawTeamClient`                    | 2, 5          |
+  | `pi_harness.clawteam.ClawTeamClient.create_task`        | 5             |
+  | `pi_harness.clawteam_profile.build_profile_specs`       | 5             |
+  | `pi_harness.clawteam_profile.ROLE_PROFILE_MAP`          | 5             |
   | `profiles/pi-openai.toml`                               | 5             |
 
-  > **Note for Plan 7 (topology layer):** Plan 7's draft API expects
-  > `launch_team(team_toml_path, run_id) -> RunHandle`. This foundation exports a different
-  > shape — `launch_team(template, team_name, goal, profile=None)`. Plan 7 should call
-  > `client.install_template(name, toml_text)` first, then `client.launch_team(name, ...)`.
-  > Update Plan 7's interface section accordingly when you reach it.
+  > **Cross-plan note:** Plans 5/7's earlier drafts assumed
+  > `launch_team(team_toml_path, run_id) -> RunHandle`. The actual Plan 1 surface
+  > is `install_template(name, toml_text)` + `launch_team(template, team_name, goal,
+  > profile=None)` + `create_task(team, subject, owner=, blocked_by=)`. The corrected
+  > Plan 5 (`2026-05-25-topology-layer.md`) follows this flow already; Plan 7
+  > consumes Plan 5's `Coordinator.launch(RunSpec)` rather than touching the
+  > ClawTeam client directly.
   ````
 - [ ] **Step 11.3** — Verify Markdown renders without errors (best-effort):
   ```bash
