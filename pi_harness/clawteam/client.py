@@ -30,8 +30,12 @@ __all__ = [
     "FAILURE_STATUSES",
 ]
 
-TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
-FAILURE_STATUSES = frozenset({"failed", "cancelled"})
+# Real ClawTeam 0.2.x task statuses (from `clawteam task update --help`):
+#   pending, in_progress, completed, blocked
+# There is no "failed" or "cancelled" status; a run is considered finished only
+# when every task is "completed". "blocked" is transient (waiting on a dependency).
+TERMINAL_STATUSES = frozenset({"completed"})
+FAILURE_STATUSES: frozenset[str] = frozenset()
 
 
 class ClawTeamCLIError(RuntimeError):

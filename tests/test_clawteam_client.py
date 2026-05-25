@@ -205,8 +205,18 @@ def test_wait_for_completion_times_out(cfg):
             client.wait_for_completion("my-team", timeout=0.05, poll_interval=0.01)
 
 
-def test_wait_for_completion_fails_on_failed_task(cfg):
+def test_wait_for_completion_fails_when_status_in_failure_set(cfg, monkeypatch):
+    """wait_for_completion raises ClawTeamRunFailure if a task's status is in FAILURE_STATUSES.
+
+    Real ClawTeam 0.2.x has no `failed` status (only pending/in_progress/completed/blocked),
+    so FAILURE_STATUSES is empty in production. This test patches it to simulate a future
+    ClawTeam version that adds a failure status. The mechanism stays in the wrapper so
+    callers remain forward-compatible.
+    """
+    from pi_harness.clawteam import client as client_mod
     from pi_harness.clawteam.client import ClawTeamClient, ClawTeamRunFailure
+
+    monkeypatch.setattr(client_mod, "FAILURE_STATUSES", frozenset({"failed"}))
 
     mixed = [
         {"task_id": "t1", "status": "completed"},
