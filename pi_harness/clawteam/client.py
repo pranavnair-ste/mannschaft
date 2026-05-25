@@ -16,7 +16,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Mapping, Optional, Sequence
+from typing import Any, ClassVar, List, Mapping, Optional, Sequence
 
 from pi_harness.clawteam_profile import ProfileSpec
 from pi_harness.config import Config
@@ -177,13 +177,19 @@ class ClawTeamClient:
         """
         return self._run(["profile", "set", *spec.to_set_args()])
 
-    def install_template(self, name: str, toml_text: str) -> Path:
-        """Drop a user-template TOML at ``<data-dir>/templates/<name>.toml``.
+    USER_TEMPLATES_DIR: ClassVar[Path] = Path.home() / ".clawteam" / "templates"
 
-        ClawTeam has no CLI verb to register templates — user templates are
-        loaded automatically from the templates dir. Returns the target path.
+    def install_template(self, name: str, toml_text: str) -> Path:
+        """Drop a user-template TOML at ``~/.clawteam/templates/<name>.toml``.
+
+        ClawTeam 0.2.x loads user templates ONLY from this fixed path —
+        ``--data-dir`` does not influence template lookup. The harness writes
+        to the global user-templates dir and callers are responsible for
+        cleaning up if they want isolation.
+
+        Returns the absolute target path.
         """
-        templates_dir = self.config.clawteam_state_dir / "templates"
+        templates_dir = self.USER_TEMPLATES_DIR
         templates_dir.mkdir(parents=True, exist_ok=True)
         target = templates_dir / f"{name}.toml"
         target.write_text(toml_text)

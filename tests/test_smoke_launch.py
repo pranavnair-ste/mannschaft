@@ -159,3 +159,8 @@ def test_smoke_launch_completes(real_cfg):
             client.cleanup_team(team_name)
         except Exception:
             pass
+        # Always clean up the global template file we wrote (~/.clawteam/templates/pi-smoke.toml).
+        try:
+            template_path.unlink(missing_ok=True)
+        except Exception:
+            pass

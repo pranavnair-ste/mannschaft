@@ -137,9 +137,22 @@ def test_register_profile_invokes_profile_set(cfg):
     assert "--api-key-env" in cmd and "OPENAI_API_KEY" in cmd
 
 
-def test_install_template_writes_file_under_data_dir(cfg):
-    """install_template writes <data-dir>/templates/<name>.toml without shelling out."""
+def test_install_template_writes_file_under_user_templates_dir(cfg, tmp_path, monkeypatch):
+    """install_template writes to the global user-templates dir without shelling out.
+
+    ClawTeam 0.2.x only loads user templates from a fixed path
+    (``~/.clawteam/templates``). The test redirects HOME to a tmp dir so
+    nothing pollutes the real filesystem.
+    """
+    from pathlib import Path
+
     from pi_harness.clawteam.client import ClawTeamClient
+
+    # Redirect ~/.clawteam/templates to a sandbox by overriding USER_TEMPLATES_DIR.
+    sandbox = tmp_path / "fake-home" / ".clawteam" / "templates"
+    monkeypatch.setattr(
+        "pi_harness.clawteam.client.ClawTeamClient.USER_TEMPLATES_DIR", sandbox
+    )
 
     client = ClawTeamClient(cfg)
     toml_text = '[template]\nname = "pi-smoke"\n'
@@ -148,7 +161,7 @@ def test_install_template_writes_file_under_data_dir(cfg):
         target = client.install_template("pi-smoke", toml_text)
 
     assert not mock_run.called, "install_template must not shell out"
-    assert target == cfg.clawteam_state_dir / "templates" / "pi-smoke.toml"
+    assert target == sandbox / "pi-smoke.toml"
     assert target.exists()
     assert target.read_text() == toml_text
 
