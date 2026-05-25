@@ -1117,21 +1117,23 @@
   async def test_capture_clawteam_transitions_emits_on_state_change(
       db_path: Path,
   ):
+      # Real ClawTeam 0.2.x task JSON uses `task_id` and `status` (not `id`/`state`),
+      # with status values pending|in_progress|completed|blocked (no `done`/`failed`).
       polls = [
           # poll 0
           [
-              {"id": "t1", "agent": "builder", "state": "pending"},
-              {"id": "t2", "agent": "reviewer", "state": "pending"},
+              {"task_id": "t1", "owner": "builder", "status": "pending"},
+              {"task_id": "t2", "owner": "reviewer", "status": "pending"},
           ],
           # poll 1: t1 moves to in_progress
           [
-              {"id": "t1", "agent": "builder", "state": "in_progress"},
-              {"id": "t2", "agent": "reviewer", "state": "pending"},
+              {"task_id": "t1", "owner": "builder", "status": "in_progress"},
+              {"task_id": "t2", "owner": "reviewer", "status": "pending"},
           ],
-          # poll 2: t1 done, t2 in_progress
+          # poll 2: t1 completed, t2 in_progress
           [
-              {"id": "t1", "agent": "builder", "state": "done"},
-              {"id": "t2", "agent": "reviewer", "state": "in_progress"},
+              {"task_id": "t1", "owner": "builder", "status": "completed"},
+              {"task_id": "t2", "owner": "reviewer", "status": "in_progress"},
           ],
       ]
 
@@ -1169,14 +1171,14 @@
       transitions = [
           e for e in events if e.classification == "task_transition"
       ]
-      # At least t1: pending -> in_progress -> done, t2: pending -> in_progress
+      # At least t1: pending -> in_progress -> completed, t2: pending -> in_progress
       states_for_t1 = [
-          e.output["state"]
+          e.output["status"]
           for e in transitions
           if e.output.get("task_id") == "t1"
       ]
       assert "in_progress" in states_for_t1
-      assert "done" in states_for_t1
+      assert "completed" in states_for_t1
   ```
 
 - [ ] **5.2** Run — confirm failure.
@@ -1200,18 +1202,15 @@
 
 ## Task 6 — Implement `capture.py`
 
-- [ ] **6.1** Inspect Plan 1's `clawteam.client` surface so the capture module calls the right function.
+- [ ] **6.1** Confirm Plan 1's `ClawTeamClient.list_tasks` is available.
 
-  Run:
+  Plan 1 exposes `list_tasks` as an **instance method** on `ClawTeamClient` (not a module-level function). Run:
   ```bash
-  uv run python -c "import pi_harness.clawteam.client as c; print([n for n in dir(c) if not n.startswith('_')])"
+  uv run python -c "from pi_harness.clawteam.client import ClawTeamClient; assert hasattr(ClawTeamClient, 'list_tasks'); print('ok')"
   ```
-
-  Expected: a list of exported names. Look for one of `list_tasks`, `list_tasks_json`, `task_list`, or `tasks`. Note the name you find — the next step references it. If none of those exist, also check `pi_harness/clawteam/client.py` directly with the Read tool and pick the function that returns parsed `clawteam task list --json` output.
+  Expected: `ok`. The capture module below builds a `ClawTeamClient` from `Config` and calls `client.list_tasks(team_name)` from a thread-pool wrapper.
 
 - [ ] **6.2** Create `/Users/pranavnair/Desktop/Personal/mannschaft/pi_harness/trajectory/capture.py`.
-
-  Use the function name discovered in 6.1 wherever `<plan1_list_tasks>` appears below. If Plan 1 exposes it as `pi_harness.clawteam.client.list_tasks`, leave the file as-is; otherwise, replace the import target accordingly.
 
   Write:
   ```python
@@ -1245,9 +1244,22 @@
   from pathlib import Path
   from typing import Any, AsyncIterator, Mapping
 
-  from pi_harness.clawteam.client import list_tasks as _clawteam_list_tasks
+  from pi_harness.clawteam.client import ClawTeamClient
+  from pi_harness.config import Config, load_config
   from pi_harness.trajectory.schema import TrajectoryEvent, _VALID_OUTCOMES
   from pi_harness.trajectory.store import awrite_event
+
+
+  async def _clawteam_list_tasks(team_name: str, *, client: ClawTeamClient | None = None) -> list[Mapping[str, Any]]:
+      """Async wrapper over Plan 1's `ClawTeamClient.list_tasks` (sync subprocess).
+
+      Tests patch this symbol directly. When called without an explicit client,
+      builds one from a freshly loaded :class:`Config` (caller must have
+      ``OPENAI_API_KEY`` set, the same env the team launch requires).
+      """
+      if client is None:
+          client = ClawTeamClient(load_config(env_file=None))
+      return await asyncio.to_thread(client.list_tasks, team_name)
 
   log = logging.getLogger(__name__)
 
@@ -1390,23 +1402,24 @@
 
           now = datetime.now(timezone.utc)
           for idx, task in enumerate(tasks):
-              task_id = str(task.get("id", ""))
+              # Real ClawTeam 0.2.x JSON uses `task_id`/`status`/`owner` field names.
+              task_id = str(task.get("task_id") or task.get("id") or "")
               if not task_id:
                   continue
-              state = str(task.get("state", ""))
+              status = str(task.get("status") or task.get("state") or "")
               prev = last_state.get(task_id)
-              if first_poll or prev != state:
+              if first_poll or prev != status:
                   ev = TrajectoryEvent(
                       run_id=run_id,
-                      agent_id=str(task.get("agent", "")) or "_team",
-                      step_id=f"clawteam-{task_id}-{state}",
+                      agent_id=str(task.get("owner") or task.get("agent") or "") or "_team",
+                      step_id=f"clawteam-{task_id}-{status}",
                       ts=now,
                       model="",
                       tool="",
-                      input={"task_id": task_id, "prev_state": prev},
+                      input={"task_id": task_id, "prev_status": prev},
                       output={
                           "task_id": task_id,
-                          "state": state,
+                          "status": status,
                           "raw": task,
                       },
                       duration_ms=0,
@@ -1421,12 +1434,12 @@
                       log.exception(
                           "capture: failed writing task_transition: %s", exc
                       )
-                  last_state[task_id] = state
+                  last_state[task_id] = status
           first_poll = False
           await asyncio.sleep(poll_interval_s)
   ```
 
-- [ ] **6.3** If 6.1 revealed a different function name, fix the import on the line `from pi_harness.clawteam.client import list_tasks as _clawteam_list_tasks` to match. Do NOT invent a new function — use what Plan 1 actually exports.
+- [ ] **6.3** (resolved) The original draft assumed Plan 1 exported `list_tasks` as a module-level function. It doesn't — it's an instance method on `ClawTeamClient`. The wrapper `_clawteam_list_tasks` above bridges sync→async via `asyncio.to_thread`, and tests can patch it directly.
 
 - [ ] **6.4** Run the capture unit tests.
 
@@ -1529,37 +1542,47 @@
 
 ## Task 8 — Smoke test: real ClawTeam team produces ≥10 events
 
-- [ ] **8.1** Inspect Plan 1's client for a "launch team" entry point.
+The Plan 1 smoke test (`tests/test_smoke_launch.py`) already validates the launch/cleanup flow with a built-in `pi-smoke` 2-agent template. This task reuses the same template + Plan 1's `ClawTeamClient` to drive a real run and verify that `capture_clawteam_transitions` records at least 10 events during it.
+
+- [ ] **8.1** Confirm Plan 1's `ClawTeamClient` exposes the team-lifecycle methods we need.
 
   Run:
   ```bash
-  uv run python -c "import pi_harness.clawteam.client as c; print([n for n in dir(c) if not n.startswith('_')])"
+  uv run python -c "
+  from pi_harness.clawteam.client import ClawTeamClient
+  for m in ('launch_team', 'cleanup_team', 'list_tasks', 'install_template', 'register_profile'):
+      assert hasattr(ClawTeamClient, m), m
+  print('ok')
+  "
   ```
+  Expected: `ok`.
 
-  Expected: list includes a function that starts a team (likely `launch_team`, `start_team`, or `run_team`) and one that tears it down (likely `stop_team` / `teardown_team`). Note both names — they go in the smoke test below as `<plan1_launch>` and `<plan1_stop>`.
-
-- [ ] **8.2** Find a minimal team profile shipped by Plan 1 to run against. Inspect `pi_harness/clawteam_profile.py` and look for an example team name or a helper that returns a sample team config.
+- [ ] **8.2** Confirm Plan 1's `clawteam_profile.build_profile_specs` is available and the smoke test reuses its specs.
 
   Run:
   ```bash
-  uv run python -c "import pi_harness.clawteam_profile as p; print([n for n in dir(p) if not n.startswith('_')])"
+  uv run python -c "from pi_harness.clawteam_profile import build_profile_specs, PROFILE_NAME_FAST; print(PROFILE_NAME_FAST)"
   ```
-
-  Expected: an exported example team name or constant (e.g. `EXAMPLE_TEAM`, `DEMO_TEAM_NAME`). Use whatever Plan 1 ships. If nothing exists, fall back to launching a team named `"trajectory-smoke"` and skip the test gracefully when no profile is configured.
+  Expected: `pi-openai-fast`.
 
 - [ ] **8.3** Create the smoke test.
 
   Create `/Users/pranavnair/Desktop/Personal/mannschaft/tests/trajectory/test_capture_e2e.py`:
   ```python
   """End-to-end smoke test: launch a real ClawTeam team via Plan 1's client,
-  capture events into a fresh trajectory db, assert ≥10 events land within 60s.
+  capture events into a fresh trajectory db, assert ≥10 events land within 120s.
 
   Marked `smoke` — skipped in default CI; run with:
-      uv run pytest tests/trajectory/test_capture_e2e.py -m smoke -v
+      OPENAI_API_KEY=sk-... uv run pytest tests/trajectory/test_capture_e2e.py -m smoke -v --timeout=240
   """
   from __future__ import annotations
 
   import asyncio
+  import os
+  import shutil
+  import textwrap
+  import uuid
+  from dataclasses import replace
   from datetime import datetime, timezone
   from pathlib import Path
 
@@ -1571,52 +1594,112 @@
   pytestmark = [pytest.mark.smoke, pytest.mark.asyncio]
 
 
-  @pytest.mark.timeout(120)
-  async def test_clawteam_smoke_emits_at_least_10_events(tmp_path: Path):
-      try:
-          from pi_harness.clawteam.client import launch_team, stop_team
-      except ImportError:
-          pytest.skip("Plan 1 client lacks launch_team/stop_team")
+  def _detect_executor() -> str:
+      override = os.environ.get("PI_HARNESS_SMOKE_EXECUTOR", "").strip()
+      aliases = {
+          "pi-coding-agent": ["pi", "pi-coding-agent"],
+          "pi": ["pi", "pi-coding-agent"],
+          "codex": ["codex"],
+      }
+      candidates = aliases.get(override, [override]) if override else ["codex", "pi", "pi-coding-agent"]
+      for cand in candidates:
+          if cand and shutil.which(cand):
+              return cand
+      pytest.skip("No coding-agent CLI on PATH; install @openai/codex or @mariozechner/pi-coding-agent")
 
-      try:
-          from pi_harness.clawteam_profile import EXAMPLE_TEAM as team_name
-      except ImportError:
-          team_name = "trajectory-smoke"
+
+  @pytest.mark.timeout(240)
+  async def test_clawteam_smoke_emits_at_least_10_events(tmp_path: Path):
+      from pi_harness.clawteam import ClawTeamClient
+      from pi_harness.clawteam_profile import build_profile_specs
+      from pi_harness.config import load_config
+
+      if not os.environ.get("OPENAI_API_KEY", "").startswith("sk-"):
+          pytest.skip("OPENAI_API_KEY not set; smoke test skipped")
+      if not shutil.which("clawteam") or not shutil.which("tmux"):
+          pytest.skip("clawteam or tmux missing from PATH")
+
+      executor = _detect_executor()
+
+      # Sandbox ClawTeam state per-test so we don't disturb the user's ~/.clawteam.
+      state_dir = tmp_path / "clawteam-state"
+      os.environ["PI_HARNESS_CLAWTEAM_STATE_DIR"] = str(state_dir)
+      cfg = load_config(env_file=None)
+      client = ClawTeamClient(cfg)
+
+      # Register profiles with the detected executor as the agent command.
+      for spec in build_profile_specs(cfg):
+          client.register_profile(replace(spec, command=executor))
+
+      # Install the same minimal 2-agent template Plan 1's smoke uses.
+      template_toml = textwrap.dedent(f"""
+          [template]
+          name = "pi-smoke"
+          description = "2-agent smoke template (reused by trajectory smoke)."
+          command = ["{executor}"]
+          backend = "tmux"
+
+          [template.leader]
+          name = "leader"
+          type = "orchestrator"
+          task = '''Create one task assigned to builder titled "write-hello". Body: "Write hello.txt with HELLO, then mark completed." Then poll `clawteam task list {{team_name}}` every 15s. Exit when the builder task is completed.'''
+
+          [[template.agents]]
+          name = "builder"
+          type = "builder"
+          task = '''When you receive "write-hello", create hello.txt at the worktree root with HELLO, then mark the task completed.'''
+      """).strip() + "\n"
+      template_path = client.install_template("pi-smoke", template_toml)
 
       db_path = tmp_path / "smoke.db"
       init_db(db_path)
       run_id = f"smoke-{datetime.now(timezone.utc).isoformat()}"
-
-      handle = await launch_team(team_name)
-      poller = asyncio.create_task(
-          capture_clawteam_transitions(
-              run_id=run_id,
-              team_name=team_name,
-              db_path=db_path,
-              poll_interval_s=2.0,
-          )
-      )
+      team_name = f"trajectory-smoke-{uuid.uuid4().hex[:8]}"
 
       try:
-          # Wait up to 60s for the team to produce events.
-          deadline = asyncio.get_event_loop().time() + 60.0
+          client.launch_team(
+              template="pi-smoke",
+              team_name=team_name,
+              goal="Write hello.txt with the word HELLO.",
+          )
+          poller = asyncio.create_task(
+              capture_clawteam_transitions(
+                  run_id=run_id,
+                  team_name=team_name,
+                  db_path=db_path,
+                  poll_interval_s=2.0,
+              )
+          )
+
+          # Wait up to 120s for the team to produce events.
+          deadline = asyncio.get_event_loop().time() + 120.0
           while asyncio.get_event_loop().time() < deadline:
               await asyncio.sleep(2.0)
               events = query_events(run_id=run_id, db_path=db_path)
               if len(events) >= 10:
                   break
-      finally:
+
           poller.cancel()
           try:
               await poller
           except asyncio.CancelledError:
               pass
-          await stop_team(handle)
+      finally:
+          try:
+              client.cleanup_team(team_name)
+          except Exception:
+              pass
+          # Plan 1's install_template writes to ~/.clawteam/templates regardless of
+          # data-dir; clean it up so we don't leak global state.
+          try:
+              template_path.unlink(missing_ok=True)
+          except Exception:
+              pass
 
       events = query_events(run_id=run_id, db_path=db_path)
       assert (
           len(events) >= 10
-      ), f"smoke: expected >=10 events in 60s, got {len(events)}"
+      ), f"smoke: expected >=10 events in 120s, got {len(events)}"
   ```
 
 - [ ] **8.4** Register the `smoke` marker in `pyproject.toml` (or `pytest.ini` if that's what Plan 1 set up) so pytest doesn't warn about it.
