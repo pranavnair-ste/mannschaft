@@ -28,7 +28,14 @@ You are building **Plan 6 of 8** for the Pi-Agent Harness ("mannschaft"). The ar
 Each `Guide` and `Sensor` is declared with a `GuardKind` indicating its quadrant. v1 ships built-ins for three of four quadrants (computational-feedforward, computational-feedback, inferential-feedback); inferential-feedforward is supported via the protocol but no built-in. The "Promote to Guide" mechanic converts a frequently-firing inferential-feedback sensor into a computational-feedforward guide (moves up and left in the 2×2).
 
 **Dependencies — what is already built when you start:**
-- **Plan 1** provides `pi_harness.config.Config` with fields including `openai_api_key: str`, `openai_fast_model: str`, `harness_root: Path`. Import as `from pi_harness.config import Config`.
+- **Plan 1** provides `pi_harness.config.Config` (a `@dataclass(frozen=True)`) with these fields:
+  - `openai_api_key: str`
+  - `reasoning_model: str` (default `gpt-5`)
+  - `fast_model: str` (default `gpt-5-mini`)
+  - `clawteam_state_dir: Path` (default `~/.clawteam`)
+  - `corpus_root: Path` (default `~/.pi-harness/corpus`)
+  - `trajectory_db_path: Path` (default `~/.pi-harness/trajectory.db`)
+  Construct via `from pi_harness.config import load_config; cfg = load_config()`. There is no `Config.load()` classmethod and no `harness_root` field — use `clawteam_state_dir.parent` or a derived path if you need a "root".
 - **Plan 2** provides:
   - `pi_harness.trajectory.schema.TrajectoryEvent` — a `pydantic.BaseModel` with fields `run_id: str`, `agent_id: str`, `step_id: str`, `ts: datetime`, `tool: str | None`, `input: dict | None`, `output: dict | None`, `outcome: str`, `classification: str`, `metadata: dict`.
   - `pi_harness.trajectory.store.write_event(event: TrajectoryEvent) -> None` — appends to SQLite.

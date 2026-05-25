@@ -1933,10 +1933,14 @@ Append to `pi_harness/spec/editor.py` (above the `main()` block):
 
 
 def get_config():
-    """Lazy import to avoid circular dependency at module load."""
-    from pi_harness.config import Config
+    """Lazy import to avoid circular dependency at module load.
 
-    return Config.load()
+    Plan 1 exposes `load_config(env_file: str | Path | None = ".env") -> Config`
+    (NOT a `Config.load()` classmethod).
+    """
+    from pi_harness.config import load_config
+
+    return load_config()
 
 
 def get_decomposer():
@@ -2191,7 +2195,7 @@ Expected: every test in `test_format.py`, `test_linter.py`, `test_decomposer.py`
 Run (in one terminal): `uv run python -m pi_harness.spec.editor &` then `sleep 1 && curl -s http://127.0.0.1:8800/openapi.json | head -40`. Stop the server with `kill %1`.
 Expected: JSON OpenAPI document lists `/specs`, `/specs/{spec_id}`, `/specs/{spec_id}/lint`, `/specs/{spec_id}/decompose`, `/specs/{spec_id}/launch`.
 
-(Skip this step if Plan 1's `Config.load()` requires env vars you don't have — the routes will still register; only `Config.load()` may explode. In that case substitute `uv run python -c "from pi_harness.spec.editor import app; import json; print(json.dumps(app.openapi(), indent=2)[:600])"` which builds the OpenAPI doc without touching `Config`.)
+(Skip this step if Plan 1's `load_config()` raises because `OPENAI_API_KEY` is unset — the routes will still register; only `load_config()` may explode. In that case substitute `uv run python -c "from pi_harness.spec.editor import app; import json; print(json.dumps(app.openapi(), indent=2)[:600])"` which builds the OpenAPI doc without touching `Config`.)
 
 - [ ] **Step 3: Final commit (only if any uncommitted changes remain)**
 

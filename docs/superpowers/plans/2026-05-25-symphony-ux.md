@@ -17,7 +17,7 @@
 
 You depend on five upstream plans. Skim their public surface before starting; if any is unimplemented when you begin a task, **stub it locally** in `tests/api/conftest.py` rather than blocking.
 
-- **Plan 1 — Config.** `pi_harness.config.Config` with `Config.from_env() -> Config`. Provides `corpus_root: Path`, `trajectory_db: Path`, `api_port: int = 8800`, `api_host: str = "127.0.0.1"`, `frontend_origin: str = "http://localhost:3000"` (for CORS).
+- **Plan 1 — Config.** `pi_harness.config.Config` (a frozen `@dataclass`) loaded via `from pi_harness.config import load_config; cfg = load_config()` — there is NO `Config.from_env()` classmethod. Provides `corpus_root: Path`, `trajectory_db_path: Path` (note: `_path` suffix), `clawteam_state_dir: Path`, `openai_api_key`, `reasoning_model`, `fast_model`. The dashboard-only knobs (`api_port`, `api_host`, `frontend_origin`) are NOT on Config — this plan reads them from env directly via `os.environ.get("PI_HARNESS_API_PORT", "8800")`, etc., or defines its own `DashboardConfig` dataclass in `pi_harness/api/config.py`.
 - **Plan 2 — Trajectory store.**
   - `pi_harness.trajectory.store.query_runs(limit: int | None = None, status: str | None = None) -> list[RunSummary]`
   - `pi_harness.trajectory.store.query_events(run_id: str, since_ts: str | None = None, limit: int | None = None) -> list[TrajectoryEvent]`
@@ -190,9 +190,15 @@ You provide downstream: nothing — this plan is the leaf.
 - [ ] **1.2** Implement `/Users/pranavnair/Desktop/Personal/mannschaft/pi_harness/api/server.py`:
   ```python
   from __future__ import annotations
+
+  import os
+  from dataclasses import dataclass
+
   from fastapi import FastAPI
   from fastapi.middleware.cors import CORSMiddleware
-  from pi_harness.config import Config
+
+  from pi_harness.config import Config, load_config
+
   # Plan 7 router import; if it doesn't exist yet, fall back to an empty APIRouter.
   try:
       from pi_harness.spec.editor import router as spec_router
@@ -200,16 +206,39 @@ You provide downstream: nothing — this plan is the leaf.
       from fastapi import APIRouter
       spec_router = APIRouter()
 
-  def create_app(config: Config) -> FastAPI:
+
+  @dataclass(frozen=True)
+  class DashboardConfig:
+      """Dashboard-specific config — kept out of Plan 1's harness Config so the
+      core library doesn't carry FastAPI/UI concerns. Loaded from env in
+      ``load_dashboard_config``."""
+      api_host: str = "127.0.0.1"
+      api_port: int = 8800
+      frontend_origin: str = "http://localhost:3000"
+
+
+  def load_dashboard_config() -> DashboardConfig:
+      return DashboardConfig(
+          api_host=os.environ.get("PI_HARNESS_API_HOST", "127.0.0.1"),
+          api_port=int(os.environ.get("PI_HARNESS_API_PORT", "8800")),
+          frontend_origin=os.environ.get(
+              "PI_HARNESS_FRONTEND_ORIGIN", "http://localhost:3000"
+          ),
+      )
+
+
+  def create_app(config: Config, dash: DashboardConfig | None = None) -> FastAPI:
+      dash = dash or load_dashboard_config()
       app = FastAPI(
           title="Pi-Agent Harness API",
           version="0.1.0",
           description="Trajectory, corpus, spec, and guard surfaces for the Symphony dashboard.",
       )
       app.state.config = config
+      app.state.dashboard_config = dash
       app.add_middleware(
           CORSMiddleware,
-          allow_origins=[config.frontend_origin],
+          allow_origins=[dash.frontend_origin],
           allow_credentials=True,
           allow_methods=["*"],
           allow_headers=["*"],
@@ -222,19 +251,21 @@ You provide downstream: nothing — this plan is the leaf.
       app.include_router(spec_router, prefix="/specs", tags=["specs"])
       return app
 
+
   def main() -> None:
+      """Entrypoint for ``python -m pi_harness.api.server``."""
       import uvicorn
-      config = Config.from_env()
-      uvicorn.run(
-          "pi_harness.api.server:create_app",
-          host=config.api_host, port=config.api_port,
-          factory=True, reload=False,
-      )
+
+      config = load_config()
+      dash = load_dashboard_config()
+      app = create_app(config, dash)
+      uvicorn.run(app, host=dash.api_host, port=dash.api_port, reload=False)
+
 
   if __name__ == "__main__":  # python -m pi_harness.api.server
       main()
   ```
-  - Note: the `factory=True` requires uvicorn to call `create_app()` with no args; provide a wrapper if `Config.from_env()` requires bootstrap. The simpler path: skip `factory=True` and use the explicit `main()` form above with a pre-built app. Adjust if `Config.from_env` accepts no args.
+  - Note: we pass a pre-built `app` to uvicorn (no `factory=True`) because `create_app` requires a `Config` argument. The Plan 1 `Config` is loaded once at startup; the dashboard knobs live on `DashboardConfig` and are read from env vars (`PI_HARNESS_API_HOST`, `PI_HARNESS_API_PORT`, `PI_HARNESS_FRONTEND_ORIGIN`).
 - [ ] **1.3** Implement the `__main__.py` entrypoint at `/Users/pranavnair/Desktop/Personal/mannschaft/pi_harness/api/__main__.py`:
   ```python
   from pi_harness.api.server import main
