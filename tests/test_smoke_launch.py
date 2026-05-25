@@ -28,16 +28,28 @@ pytestmark = pytest.mark.smoke
 
 
 def _detect_executor() -> str:
-    """Pick a coding-agent CLI: respect PI_HARNESS_SMOKE_EXECUTOR, else codex, else pi-coding-agent."""
+    """Pick a coding-agent CLI: respect PI_HARNESS_SMOKE_EXECUTOR, else codex, else pi.
+
+    Note on names: ``@mariozechner/pi-coding-agent`` installs a binary called ``pi``
+    (not ``pi-coding-agent``). The override accepts either form for ergonomics.
+    """
+    aliases = {
+        "pi-coding-agent": ["pi", "pi-coding-agent"],
+        "pi": ["pi", "pi-coding-agent"],
+        "codex": ["codex"],
+    }
     override = os.environ.get("PI_HARNESS_SMOKE_EXECUTOR", "").strip()
-    candidates = [override] if override else ["codex", "pi-coding-agent"]
+    if override:
+        candidates = aliases.get(override, [override])
+    else:
+        candidates = ["codex", "pi", "pi-coding-agent"]
     for cand in candidates:
         if cand and shutil.which(cand):
             return cand
     pytest.skip(
         "No coding-agent CLI found on PATH. Install one:\n"
-        "  npm install -g @openai/codex\n"
-        "  npm install -g @mariozechner/pi-coding-agent"
+        "  npm install -g @openai/codex                  (binary: codex)\n"
+        "  npm install -g @mariozechner/pi-coding-agent  (binary: pi)"
     )
 
 

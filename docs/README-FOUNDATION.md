@@ -10,8 +10,8 @@ module imports, and a tested subprocess wrapper around the real `clawteam` 0.2.x
 - Node 20+ and `npm`
 - `tmux` (macOS: `brew install tmux`)
 - ONE of:
-  - `@openai/codex`: `npm install -g @openai/codex` (default; matches `openai-official` preset)
-  - `@mariozechner/pi-coding-agent`: `npm install -g @mariozechner/pi-coding-agent`
+  - `@openai/codex`: `npm install -g @openai/codex` (binary: `codex` — matches `openai-official` preset)
+  - `@mariozechner/pi-coding-agent`: `npm install -g @mariozechner/pi-coding-agent` (binary: `pi`)
 - An OpenAI API key (smoke test only)
 
 ## Install
