@@ -166,6 +166,48 @@ def test_install_template_writes_file_under_user_templates_dir(cfg, tmp_path, mo
     assert target.read_text() == toml_text
 
 
+def test_create_task_minimum_args(cfg):
+    from pi_harness.clawteam.client import ClawTeamClient
+
+    client = ClawTeamClient(cfg)
+    with patch("pi_harness.clawteam.client.subprocess.run") as mock_run:
+        mock_run.return_value = _completed(stdout="ok")
+        client.create_task("my-team", "write hello")
+
+    cmd = mock_run.call_args.args[0]
+    create_idx = cmd.index("create")
+    assert cmd[create_idx - 1] == "task"
+    assert cmd[create_idx + 1] == "my-team"
+    assert cmd[create_idx + 2] == "write hello"
+    assert "--description" not in cmd
+    assert "--owner" not in cmd
+    assert "--blocked-by" not in cmd
+
+
+def test_create_task_passes_all_optional_args(cfg):
+    from pi_harness.clawteam.client import ClawTeamClient
+
+    client = ClawTeamClient(cfg)
+    with patch("pi_harness.clawteam.client.subprocess.run") as mock_run:
+        mock_run.return_value = _completed(stdout="ok")
+        client.create_task(
+            "my-team",
+            "build feature",
+            description="describe it",
+            owner="builder",
+            priority="high",
+            blocks=["t-down"],
+            blocked_by=["t-up-1", "t-up-2"],
+        )
+
+    cmd = mock_run.call_args.args[0]
+    assert "--description" in cmd and "describe it" in cmd
+    assert "--owner" in cmd and "builder" in cmd
+    assert "--priority" in cmd and "high" in cmd
+    assert "--blocks" in cmd and "t-down" in cmd
+    assert "--blocked-by" in cmd and "t-up-1,t-up-2" in cmd
+
+
 def test_cleanup_team_invokes_team_cleanup_force(cfg):
     from pi_harness.clawteam.client import ClawTeamClient
 

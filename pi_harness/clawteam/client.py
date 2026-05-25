@@ -132,6 +132,41 @@ class ClawTeamClient:
         """
         return self._run(["team", "cleanup", team_name, "--force"])
 
+    def create_task(
+        self,
+        team_name: str,
+        subject: str,
+        *,
+        description: Optional[str] = None,
+        owner: Optional[str] = None,
+        priority: Optional[str] = None,
+        blocks: Optional[Sequence[str]] = None,
+        blocked_by: Optional[Sequence[str]] = None,
+    ) -> subprocess.CompletedProcess:
+        """Create a task on ``team_name``'s board.
+
+        Real invocation:
+            ``clawteam --data-dir D task create TEAM SUBJECT
+              [--description X] [--owner Y] [--priority P]
+              [--blocks id1,id2] [--blocked-by id1,id2]``
+
+        Used by the topology layer to build task DAGs at runtime, since
+        ClawTeam templates declare only agents — tasks are created after
+        the team launches.
+        """
+        sub: List[str] = ["task", "create", team_name, subject]
+        if description is not None:
+            sub.extend(["--description", description])
+        if owner is not None:
+            sub.extend(["--owner", owner])
+        if priority is not None:
+            sub.extend(["--priority", priority])
+        if blocks:
+            sub.extend(["--blocks", ",".join(blocks)])
+        if blocked_by:
+            sub.extend(["--blocked-by", ",".join(blocked_by)])
+        return self._run(sub)
+
     # ---- read state ----------------------------------------------------- #
 
     def list_tasks(self, team_name: str) -> List[Mapping[str, Any]]:
