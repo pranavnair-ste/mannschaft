@@ -1,0 +1,5 @@
+# Worktrees for isolated agent work — do not commit
+.worktrees/
+
+# OS
+.DS_Store
