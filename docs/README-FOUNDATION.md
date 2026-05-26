@@ -108,12 +108,22 @@ When merging a plan branch (`worktree-agent-...` or `feat/...`) into `main`:
    stub will shadow the real module during test collection — drop it in a
    `chore(tests):` commit. Example: commit `0406e26` removed Plan 3's
    `pi_harness.trajectory` stub once Plan 2 landed.
-3. **Regenerate the lockfile.** `uv lock` once. Git's textual 3-way merge of
-   parallel `uv.lock` diffs usually succeeds, but only a re-resolve guarantees
-   the lockfile is coherent against the merged `pyproject.toml`.
-4. **Run the full suite.** `uv run pytest --tb=short -q`. Reference counts after
-   each plan lands: 31 passed (Plan 1) → 59 (+Plan 2) → 140 (+Plan 3). Two smoke
-   tests skip without an `OPENAI_API_KEY` in the pytest env; that's expected.
+3. **Expect a `pyproject.toml` conflict when two parallel branches both add
+   deps.** Plans 2+3 happened to auto-merge cleanly because their alphabetical
+   inserts fell on different lines; Plans 4+6 conflicted because both inserted
+   into the same line region AND both added `openai` with different specs.
+   Resolution pattern: combine the two diffs into one alphabetically-ordered
+   `dependencies = [...]` block, and for any duplicated package take the
+   **intersection** of the version specs (e.g. `openai>=1.0.0` ∩ `openai>=1.0,<3.0`
+   = `openai>=1.0,<3.0`). Then stage the resolved file.
+4. **Regenerate the lockfile.** Delete `uv.lock` and run `uv lock` once. Git's
+   textual 3-way merge of parallel `uv.lock` diffs is best-effort at best — a
+   clean re-resolve is the only way to guarantee coherence against the merged
+   `pyproject.toml`.
+5. **Run the full suite.** `uv run pytest --tb=short -q`. Reference counts after
+   each plan lands: 31 (Plan 1) → 59 (+Plan 2) → 140 (+Plan 3) → 162 (+Plan 4) →
+   230 (+Plan 6). Two smoke tests skip without an `OPENAI_API_KEY` in the
+   pytest env; that's expected.
 
 ### Avoiding the stub-cleanup step on future parallel pairs
 
