@@ -80,7 +80,7 @@ Each file has one responsibility: `types` defines protocols/data, `guides` and `
 - Create: `tests/guards/__init__.py` (empty)
 - Modify: `pyproject.toml` (add `jsonschema` dependency)
 
-- [ ] **Step 1: Verify prerequisites**
+- [x] **Step 1: Verify prerequisites**
 
 Run:
 ```bash
@@ -91,18 +91,18 @@ ls /Users/pranavnair/Desktop/Personal/mannschaft/pi_harness/trajectory/store.py
 
 Expected: all three files exist. If not, Plans 1 and 2 are not complete — stop and raise.
 
-- [ ] **Step 2: Create the guards package init (empty)**
+- [x] **Step 2: Create the guards package init (empty)**
 
 Create `pi_harness/guards/__init__.py` with a single line:
 ```python
 """Guides + Sensors — control-system surface for pi-coding-agent tool stream."""
 ```
 
-- [ ] **Step 3: Create the tests package init**
+- [x] **Step 3: Create the tests package init**
 
 Create `tests/guards/__init__.py` as an empty file.
 
-- [ ] **Step 4: Add jsonschema dependency**
+- [x] **Step 4: Add jsonschema dependency**
 
 In `pyproject.toml` find the `[project] dependencies` array and add `"jsonschema>=4.21"`. `pydantic` is already present from Plan 2.
 
@@ -113,7 +113,7 @@ uv sync
 
 Expected: install completes, `jsonschema` listed in lockfile.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/__init__.py tests/guards/__init__.py pyproject.toml uv.lock
@@ -128,7 +128,7 @@ git commit -m "chore(guards): scaffold guards package + add jsonschema dep"
 - Modify: `pi_harness/guards/types.py` (new file)
 - Test: `tests/guards/test_types.py`
 
-- [ ] **Step 1: Write failing test for GuardKind values**
+- [x] **Step 1: Write failing test for GuardKind values**
 
 Create `tests/guards/test_types.py`:
 ```python
@@ -157,12 +157,12 @@ def test_guardresult_deny_with_confidence_and_metadata():
     assert r.metadata["path"] == "/x"
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/guards/test_types.py -v`
 Expected: `ImportError` (module not yet created).
 
-- [ ] **Step 3: Implement GuardKind + GuardResult**
+- [x] **Step 3: Implement GuardKind + GuardResult**
 
 Create `pi_harness/guards/types.py`:
 ```python
@@ -197,12 +197,12 @@ class GuardResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/guards/test_types.py -v`
 Expected: 3 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/types.py tests/guards/test_types.py
@@ -217,7 +217,7 @@ git commit -m "feat(guards): add GuardKind enum and GuardResult dataclass"
 - Modify: `pi_harness/guards/types.py`
 - Modify: `tests/guards/test_types.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_types.py`:
 ```python
@@ -250,12 +250,12 @@ def test_action_result_required_keys():
     assert result["exit_code"] == 0
 ```
 
-- [ ] **Step 2: Run test (verify fail)**
+- [x] **Step 2: Run test (verify fail)**
 
 Run: `uv run pytest tests/guards/test_types.py -v`
 Expected: ImportError for ActionIntent/ActionResult.
 
-- [ ] **Step 3: Add typed dicts to `pi_harness/guards/types.py`**
+- [x] **Step 3: Add typed dicts to `pi_harness/guards/types.py`**
 
 Append:
 ```python
@@ -295,12 +295,12 @@ class ActionResult(TypedDict, total=False):
     duration_ms: int
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_types.py -v`
 Expected: 5 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/types.py tests/guards/test_types.py
@@ -315,7 +315,7 @@ git commit -m "feat(guards): add ActionIntent and ActionResult typed dicts"
 - Modify: `pi_harness/guards/types.py`
 - Modify: `tests/guards/test_types.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_types.py`:
 ```python
@@ -354,12 +354,12 @@ def test_guide_must_expose_kind_attribute():
     assert s.kind == GuardKind.COMPUTATIONAL_GUIDE
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_types.py -v`
 Expected: ImportError for Guide / Sensor.
 
-- [ ] **Step 3: Add protocols to `pi_harness/guards/types.py`**
+- [x] **Step 3: Add protocols to `pi_harness/guards/types.py`**
 
 Append:
 ```python
@@ -393,12 +393,12 @@ class Sensor(Protocol):
     def __call__(self, result: ActionResult) -> GuardResult: ...
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_types.py -v`
 Expected: 8 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/types.py tests/guards/test_types.py
@@ -413,7 +413,7 @@ git commit -m "feat(guards): add Guide and Sensor protocols"
 - Modify: `pi_harness/guards/types.py`
 - Modify: `tests/guards/test_types.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_types.py`:
 ```python
@@ -464,12 +464,12 @@ def test_register_guide_rejects_duplicate_name():
             def __call__(self, intent): return GuardResult(allow=True, reason="")
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_types.py -v`
 Expected: ImportError.
 
-- [ ] **Step 3: Add registries to `pi_harness/guards/types.py`**
+- [x] **Step 3: Add registries to `pi_harness/guards/types.py`**
 
 Append:
 ```python
@@ -505,12 +505,12 @@ def register_sensor(name: str):
     return deco
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_types.py -v`
 Expected: 11 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/types.py tests/guards/test_types.py
@@ -525,7 +525,7 @@ git commit -m "feat(guards): add register_guide/register_sensor registry decorat
 - Modify: `pi_harness/guards/__init__.py`
 - Test: `tests/guards/test_types.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_types.py`:
 ```python
@@ -563,12 +563,12 @@ def test_load_user_guards_skips_missing_dir(tmp_path):
     load_user_guards(missing)  # should not raise
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_types.py -v`
 Expected: ImportError for load_user_guards.
 
-- [ ] **Step 3: Wire `__init__.py` and add discovery**
+- [x] **Step 3: Wire `__init__.py` and add discovery**
 
 Replace `pi_harness/guards/__init__.py` with:
 ```python
@@ -629,12 +629,12 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_types.py -v`
 Expected: 13 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/__init__.py tests/guards/test_types.py
@@ -649,7 +649,7 @@ git commit -m "feat(guards): add load_user_guards dynamic import discovery"
 - Create: `pi_harness/guards/guides.py`
 - Create: `tests/guards/test_guides.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Create `tests/guards/test_guides.py`:
 ```python
@@ -684,12 +684,12 @@ def test_allowlist_guide_denies_unlisted_tool():
     assert "not in allowlist" in r.reason
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_guides.py -v`
 Expected: ImportError.
 
-- [ ] **Step 3: Implement AllowlistGuide**
+- [x] **Step 3: Implement AllowlistGuide**
 
 Create `pi_harness/guards/guides.py`:
 ```python
@@ -718,12 +718,12 @@ class AllowlistGuide:
         )
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_guides.py -v`
 Expected: 3 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/guides.py tests/guards/test_guides.py
@@ -738,7 +738,7 @@ git commit -m "feat(guards): add AllowlistGuide"
 - Modify: `pi_harness/guards/guides.py`
 - Modify: `tests/guards/test_guides.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_guides.py`:
 ```python
@@ -787,12 +787,12 @@ def test_path_scope_guide_allows_when_no_path_key():
     assert "no path" in r.reason.lower()
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_guides.py -v`
 Expected: ImportError for PathScopeGuide.
 
-- [ ] **Step 3: Implement PathScopeGuide**
+- [x] **Step 3: Implement PathScopeGuide**
 
 Append to `pi_harness/guards/guides.py`:
 ```python
@@ -834,12 +834,12 @@ class PathScopeGuide:
         )
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_guides.py -v`
 Expected: 7 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/guides.py tests/guards/test_guides.py
@@ -854,7 +854,7 @@ git commit -m "feat(guards): add PathScopeGuide with realpath escape detection"
 - Modify: `pi_harness/guards/guides.py`
 - Modify: `tests/guards/test_guides.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_guides.py`:
 ```python
@@ -895,12 +895,12 @@ def test_schema_validator_skips_other_tools():
     assert "different tool" in r.reason.lower()
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_guides.py -v`
 Expected: ImportError for SchemaValidatorGuide.
 
-- [ ] **Step 3: Implement SchemaValidatorGuide**
+- [x] **Step 3: Implement SchemaValidatorGuide**
 
 Append to `pi_harness/guards/guides.py`:
 ```python
@@ -937,12 +937,12 @@ class SchemaValidatorGuide:
         )
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_guides.py -v`
 Expected: 10 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/guides.py tests/guards/test_guides.py
@@ -957,7 +957,7 @@ git commit -m "feat(guards): add SchemaValidatorGuide using jsonschema"
 - Modify: `pi_harness/guards/guides.py`
 - Modify: `tests/guards/test_guides.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_guides.py`:
 ```python
@@ -1020,12 +1020,12 @@ def test_rate_limit_guide_separates_agents(monkeypatch):
     assert r2.allow is True
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_guides.py -v`
 Expected: ImportError for RateLimitGuide.
 
-- [ ] **Step 3: Implement RateLimitGuide**
+- [x] **Step 3: Implement RateLimitGuide**
 
 Append to `pi_harness/guards/guides.py`:
 ```python
@@ -1076,12 +1076,12 @@ class RateLimitGuide:
         )
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_guides.py -v`
 Expected: 15 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/guides.py tests/guards/test_guides.py
@@ -1096,7 +1096,7 @@ git commit -m "feat(guards): add RateLimitGuide token-bucket limiter"
 - Create: `pi_harness/guards/sensors.py`
 - Create: `tests/guards/test_sensors.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Create `tests/guards/test_sensors.py`:
 ```python
@@ -1152,12 +1152,12 @@ def test_regex_sensor_handles_non_string_output():
     assert r.allow is False
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_sensors.py -v`
 Expected: ImportError.
 
-- [ ] **Step 3: Implement RegexAssertionSensor**
+- [x] **Step 3: Implement RegexAssertionSensor**
 
 Create `pi_harness/guards/sensors.py`:
 ```python
@@ -1205,12 +1205,12 @@ class RegexAssertionSensor:
         return GuardResult(allow=True, reason=f"pattern '{self.pattern}' absent (ok)")
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_sensors.py -v`
 Expected: 6 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/sensors.py tests/guards/test_sensors.py
@@ -1225,7 +1225,7 @@ git commit -m "feat(guards): add RegexAssertionSensor"
 - Modify: `pi_harness/guards/sensors.py`
 - Modify: `tests/guards/test_sensors.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_sensors.py`:
 ```python
@@ -1255,12 +1255,12 @@ def test_exit_code_sensor_skips_when_no_exit_code():
     assert "no exit_code" in r.reason
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_sensors.py -v`
 Expected: ImportError for ExitCodeSensor.
 
-- [ ] **Step 3: Implement ExitCodeSensor**
+- [x] **Step 3: Implement ExitCodeSensor**
 
 Append to `pi_harness/guards/sensors.py`:
 ```python
@@ -1290,12 +1290,12 @@ class ExitCodeSensor:
         )
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_sensors.py -v`
 Expected: 9 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/sensors.py tests/guards/test_sensors.py
@@ -1310,7 +1310,7 @@ git commit -m "feat(guards): add ExitCodeSensor"
 - Modify: `pi_harness/guards/sensors.py`
 - Modify: `tests/guards/test_sensors.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_sensors.py`:
 ```python
@@ -1392,12 +1392,12 @@ def test_judge_agent_sensor_kind_is_inferential(mock_openai_cls):
     assert s.kind == GuardKind.INFERENTIAL_SENSOR
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_sensors.py -v`
 Expected: ImportError for JudgeAgentSensor.
 
-- [ ] **Step 3: Implement JudgeAgentSensor**
+- [x] **Step 3: Implement JudgeAgentSensor**
 
 Append to `pi_harness/guards/sensors.py`:
 ```python
@@ -1474,12 +1474,12 @@ class JudgeAgentSensor:
         )
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_sensors.py -v`
 Expected: 13 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/sensors.py tests/guards/test_sensors.py
@@ -1494,7 +1494,7 @@ git commit -m "feat(guards): add JudgeAgentSensor (inferential, OpenAI-backed)"
 - Modify: `pi_harness/guards/sensors.py`
 - Modify: `tests/guards/test_sensors.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_sensors.py`:
 ```python
@@ -1539,12 +1539,12 @@ def test_token_budget_sensor_per_agent():
     assert r2.allow is True
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_sensors.py -v`
 Expected: ImportError for TokenBudgetSensor.
 
-- [ ] **Step 3: Implement TokenBudgetSensor**
+- [x] **Step 3: Implement TokenBudgetSensor**
 
 Append to `pi_harness/guards/sensors.py`:
 ```python
@@ -1590,12 +1590,12 @@ class TokenBudgetSensor:
         )
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_sensors.py -v`
 Expected: 17 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/sensors.py tests/guards/test_sensors.py
@@ -1610,7 +1610,7 @@ git commit -m "feat(guards): add TokenBudgetSensor with soft/hard caps"
 - Create: `pi_harness/guards/runner.py`
 - Create: `tests/guards/test_runner.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Create `tests/guards/test_runner.py`:
 ```python
@@ -1650,12 +1650,12 @@ def test_guard_runner_attach_extends_not_replaces():
     assert r.guides == [g1, g2]
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_runner.py -v`
 Expected: ImportError.
 
-- [ ] **Step 3: Implement GuardRunner skeleton**
+- [x] **Step 3: Implement GuardRunner skeleton**
 
 Create `pi_harness/guards/runner.py`:
 ```python
@@ -1711,12 +1711,12 @@ class GuardRunner:
         self.sensors.extend(list(sensors))
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_runner.py -v`
 Expected: 4 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/runner.py tests/guards/test_runner.py
@@ -1731,7 +1731,7 @@ git commit -m "feat(guards): add GuardRunner skeleton with attach methods"
 - Modify: `pi_harness/guards/runner.py`
 - Modify: `tests/guards/test_runner.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_runner.py`:
 ```python
@@ -1814,12 +1814,12 @@ def test_intercept_writes_guide_fired_event_on_allow_too(mock_write):
     assert event.outcome == "allow"
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_runner.py -v`
 Expected: AttributeError — `intercept_tool_call` missing.
 
-- [ ] **Step 3: Implement intercept_tool_call**
+- [x] **Step 3: Implement intercept_tool_call**
 
 Append to `pi_harness/guards/runner.py`:
 ```python
@@ -1870,12 +1870,12 @@ Append to `pi_harness/guards/runner.py`:
         write_event(event)
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_runner.py -v`
 Expected: 8 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/runner.py tests/guards/test_runner.py
@@ -1890,7 +1890,7 @@ git commit -m "feat(guards): GuardRunner.intercept_tool_call with short-circuit 
 - Modify: `pi_harness/guards/runner.py`
 - Modify: `tests/guards/test_runner.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_runner.py`:
 ```python
@@ -1950,12 +1950,12 @@ def test_intercept_tool_result_no_sensors_returns_empty(mock_write):
     assert mock_write.call_count == 0
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_runner.py -v`
 Expected: AttributeError.
 
-- [ ] **Step 3: Implement intercept_tool_result**
+- [x] **Step 3: Implement intercept_tool_result**
 
 Append to `pi_harness/guards/runner.py`:
 ```python
@@ -2000,12 +2000,12 @@ Append to `pi_harness/guards/runner.py`:
         write_event(event)
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_runner.py -v`
 Expected: 11 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/runner.py tests/guards/test_runner.py
@@ -2020,7 +2020,7 @@ git commit -m "feat(guards): GuardRunner.intercept_tool_result fires all sensors
 - Modify: `pi_harness/guards/__init__.py`
 - Modify: `tests/guards/test_runner.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_runner.py`:
 ```python
@@ -2030,12 +2030,12 @@ def test_guard_runner_reexported_from_package():
     assert TopLevel is Internal
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_runner.py::test_guard_runner_reexported_from_package -v`
 Expected: ImportError.
 
-- [ ] **Step 3: Add export to `pi_harness/guards/__init__.py`**
+- [x] **Step 3: Add export to `pi_harness/guards/__init__.py`**
 
 Edit `pi_harness/guards/__init__.py`. Add to existing imports block:
 ```python
@@ -2044,12 +2044,12 @@ from pi_harness.guards.runner import GuardRunner
 
 And append `"GuardRunner"` to the `__all__` list.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/ -v`
 Expected: all green (32 tests at this point).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/__init__.py tests/guards/test_runner.py
@@ -2064,7 +2064,7 @@ git commit -m "feat(guards): re-export GuardRunner from package root"
 - Create: `pi_harness/guards/promote.py`
 - Create: `tests/guards/test_promote.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Create `tests/guards/test_promote.py`:
 ```python
@@ -2086,12 +2086,12 @@ def test_promotion_suggestion_fields():
     assert "FooGuide" in s.suggested_stub_code
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_promote.py -v`
 Expected: ImportError.
 
-- [ ] **Step 3: Implement PromotionSuggestion**
+- [x] **Step 3: Implement PromotionSuggestion**
 
 Create `pi_harness/guards/promote.py`:
 ```python
@@ -2125,12 +2125,12 @@ class PromotionSuggestion:
     evidence: dict[str, Any] = field(default_factory=dict)
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_promote.py -v`
 Expected: 1 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/promote.py tests/guards/test_promote.py
@@ -2145,7 +2145,7 @@ git commit -m "feat(promote): add PromotionSuggestion dataclass"
 - Modify: `pi_harness/guards/promote.py`
 - Modify: `tests/guards/test_promote.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_promote.py`:
 ```python
@@ -2217,12 +2217,12 @@ def test_candidate_emitted_with_23_allow_2_deny(mock_q):
     assert "must mention success" in sug.sensor_criterion
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_promote.py -v`
 Expected: ImportError for suggest_promotions.
 
-- [ ] **Step 3: Implement suggest_promotions (grouping + filter only; stub gen next task)**
+- [x] **Step 3: Implement suggest_promotions (grouping + filter only; stub gen next task)**
 
 Append to `pi_harness/guards/promote.py`:
 ```python
@@ -2297,12 +2297,12 @@ def _render_stub(
     return ("# stub pending", "computational_guide")
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_promote.py -v`
 Expected: 4 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/promote.py tests/guards/test_promote.py
@@ -2317,7 +2317,7 @@ git commit -m "feat(promote): suggest_promotions groups, filters by fires+varian
 - Modify: `pi_harness/guards/promote.py`
 - Modify: `tests/guards/test_promote.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `tests/guards/test_promote.py`:
 ```python
@@ -2379,12 +2379,12 @@ def test_stub_includes_evidence_comment(mock_q):
     assert "23/25" in code or "0.92" in code or "promoted from" in code.lower()
 ```
 
-- [ ] **Step 2: Run test (fail)**
+- [x] **Step 2: Run test (fail)**
 
 Run: `uv run pytest tests/guards/test_promote.py -v`
 Expected: the new tests fail — the placeholder stub doesn't compile or doesn't contain required strings.
 
-- [ ] **Step 3: Implement real _render_stub**
+- [x] **Step 3: Implement real _render_stub**
 
 In `pi_harness/guards/promote.py` replace the placeholder `_render_stub` with:
 ```python
@@ -2512,12 +2512,12 @@ def _shared_top_level_keys(dicts: list[dict]) -> set[str]:
 
 Also import `re` at the top of `promote.py` if not already.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `uv run pytest tests/guards/test_promote.py -v`
 Expected: 7 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/promote.py tests/guards/test_promote.py
@@ -2532,7 +2532,7 @@ git commit -m "feat(promote): generate compilable Guide/Sensor stubs from sensor
 - Modify: `pi_harness/guards/__init__.py`
 - Verify: all `pi_harness/guards/*.py` and `tests/guards/*.py`
 
-- [ ] **Step 1: Add remaining exports**
+- [x] **Step 1: Add remaining exports**
 
 Edit `pi_harness/guards/__init__.py` so `__all__` includes the public surface needed by Plan 5 (Topology) and Plan 8 (Dashboard).
 
@@ -2562,12 +2562,12 @@ from pi_harness.guards.promote import PromotionSuggestion, suggest_promotions
 
 Append the corresponding names to `__all__`.
 
-- [ ] **Step 2: Verify the full guards test suite is green**
+- [x] **Step 2: Verify the full guards test suite is green**
 
 Run: `uv run pytest tests/guards/ -v`
 Expected: all tests pass (~40 tests across the five test files).
 
-- [ ] **Step 3: Verify package can be imported flat**
+- [x] **Step 3: Verify package can be imported flat**
 
 Run:
 ```bash
@@ -2576,12 +2576,12 @@ uv run python -c "from pi_harness.guards import GuardRunner, AllowlistGuide, Jud
 
 Expected: prints `ok`, no ImportError.
 
-- [ ] **Step 4: Run the wider test suite to make sure nothing else broke**
+- [x] **Step 4: Run the wider test suite to make sure nothing else broke**
 
 Run: `uv run pytest -v`
 Expected: all green (Plans 1, 2, 3, 4 tests included if they exist; otherwise just guards).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pi_harness/guards/__init__.py
