@@ -183,3 +183,44 @@ def test_summarize_git_diff() -> None:
     # Some + and - markers survive (first/last 3 hunks).
     assert "+" in summary
     assert "-" in summary
+
+
+# ---------------------------------------------------------------------------
+# build_messages / load_prompt_template
+# ---------------------------------------------------------------------------
+
+
+def test_load_prompt_template_reads_file() -> None:
+    """load_prompt_template returns the v1 template content."""
+    from pi_harness.improve.agent import load_prompt_template
+
+    text = load_prompt_template()
+    assert isinstance(text, str)
+    assert len(text) > 0
+    # Anchor text from the template — Task 4.
+    assert "Improve-Agent System Prompt" in text
+
+
+def test_build_messages_includes_all_inputs() -> None:
+    """The user message contains the run_id, all 4 summaries, and the closing reminder."""
+    from pi_harness.improve.agent import build_messages
+
+    msgs = build_messages(
+        run_id="run-abc",
+        trajectory_summary={"run_shape": {"agents": ["a"]}, "per_agent_steps": {}},
+        corpus_summary=[{"id": "e1", "body_preview": "p"}],
+        git_diff_summary="file.py: +3 -0",
+        prompt_template_text="TEMPLATE_BODY",
+    )
+
+    assert isinstance(msgs, list)
+    assert len(msgs) == 2
+    assert msgs[0]["role"] == "system"
+    assert msgs[0]["content"] == "TEMPLATE_BODY"
+    assert msgs[1]["role"] == "user"
+    user = msgs[1]["content"]
+    assert "run-abc" in user
+    assert "run_shape" in user
+    assert "e1" in user
+    assert "file.py: +3 -0" in user
+    assert "Return ONLY a JSON object" in user
