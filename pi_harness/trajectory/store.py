@@ -233,11 +233,30 @@ def query_agent_steps(
     )
 
 
+def init_db_from_config() -> Path:
+    """Convenience: init the db at Config.trajectory_db_path.
+
+    Used by the harness's startup wiring. Tests and ad-hoc callers should
+    pass an explicit `db_path` to `init_db` instead.
+
+    Plan 1 exposes its loader as the module-level :func:`load_config`
+    function (not ``Config.load()``); we call it with ``env_file=None`` so
+    callers must already have the required env vars in process.
+    """
+    # Local import to avoid a hard dep cycle if config.py itself imports
+    # anything from pi_harness.trajectory in the future.
+    from pi_harness.config import load_config
+
+    cfg = load_config(env_file=None)
+    return init_db(cfg.trajectory_db_path)
+
+
 # `asyncio` re-exported so capture pipelines can `from store import asyncio`
 # without a second import (matches the rest of pi_harness).
 __all__ = [
     "SCHEMA_VERSION",
     "init_db",
+    "init_db_from_config",
     "write_event",
     "awrite_event",
     "query_events",

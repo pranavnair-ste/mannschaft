@@ -200,3 +200,25 @@ def test_indexes_exist(db_path: Path):
         }
     assert "idx_events_run_ts" in idx
     assert "idx_events_run_agent_step" in idx
+
+
+def test_init_db_from_config_uses_config_path(tmp_path, monkeypatch):
+    """``init_db_from_config`` must call Plan 1's loader and use the resulting
+    ``trajectory_db_path``. Plan 1's loader is the module-level
+    ``load_config`` function (not ``Config.load()``), so we patch that."""
+    from pi_harness.trajectory import store as store_mod
+
+    target = tmp_path / "from_cfg.db"
+
+    class StubCfg:
+        trajectory_db_path = target
+
+    # The helper does `from pi_harness.config import load_config` at call time;
+    # patch the module attribute so the local-binding inside the helper
+    # resolves to our stub.
+    import pi_harness.config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod, "load_config", lambda *a, **kw: StubCfg())
+    created = store_mod.init_db_from_config()
+    assert created == target
+    assert target.exists()
