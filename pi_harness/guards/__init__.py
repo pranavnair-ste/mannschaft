@@ -35,12 +35,15 @@ from pi_harness.guards.sensors import (
 from pi_harness.guards.types import (
     ActionIntent,
     ActionResult,
+    GUARD_META_KEY,
     GUIDE_REGISTRY,
     GuardKind,
     GuardResult,
     Guide,
     SENSOR_REGISTRY,
     Sensor,
+    get_guard_allow,
+    get_guard_meta,
     register_guide,
     register_sensor,
 )
@@ -76,6 +79,10 @@ __all__ = [
     "GuardResult",
     "Guide",
     "Sensor",
+    # event format
+    "GUARD_META_KEY",
+    "get_guard_allow",
+    "get_guard_meta",
     # registry surface
     "GUIDE_REGISTRY",
     "SENSOR_REGISTRY",

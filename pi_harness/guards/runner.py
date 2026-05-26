@@ -52,6 +52,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from pi_harness.guards.types import (
+    GUARD_META_KEY,
     ActionIntent,
     ActionResult,
     GuardResult,
@@ -156,7 +157,7 @@ class GuardRunner:
             model="",
             tool=intent.get("tool", "") or "",
             input=dict(intent.get("input", {})),
-            output={"_guard_meta": _guide_meta(guide, result)},
+            output={GUARD_META_KEY: _guide_meta(guide, result)},
             duration_ms=0,
             tokens_in=0,
             tokens_out=0,
@@ -190,7 +191,7 @@ class GuardRunner:
         result: GuardResult,
     ) -> None:
         merged_output: dict[str, Any] = dict(action_result.get("output", {}))
-        merged_output["_guard_meta"] = _sensor_meta(sensor, result)
+        merged_output[GUARD_META_KEY] = _sensor_meta(sensor, result)
 
         event = TrajectoryEvent(
             run_id=self.run_id,

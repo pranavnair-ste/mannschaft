@@ -26,6 +26,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
+from pi_harness.guards.types import GUARD_META_KEY, get_guard_meta
 from pi_harness.trajectory.schema import TrajectoryEvent
 from pi_harness.trajectory.store import query_events
 
@@ -57,17 +58,6 @@ class PromotionSuggestion:
     suggested_stub_code: str
     suggested_kind: str
     evidence: dict[str, Any] = field(default_factory=dict)
-
-
-def _guard_meta(event: TrajectoryEvent) -> dict[str, Any]:
-    """Pull the ``_guard_meta`` sub-mapping out of an event's output. Returns
-    an empty dict if absent (e.g. for non-guard events).
-    """
-    output = event.output or {}
-    meta = output.get("_guard_meta", {})
-    if isinstance(meta, dict):
-        return meta
-    return {}
 
 
 def suggest_promotions(
@@ -104,7 +94,7 @@ def suggest_promotions(
     for ev in events:
         if ev.classification != "sensor_fired":
             continue
-        meta = _guard_meta(ev)
+        meta = get_guard_meta(ev)
         if meta.get("sensor_kind") != "inferential_sensor":
             continue
         sensor = meta.get("sensor", "")
@@ -117,7 +107,7 @@ def suggest_promotions(
         if n < min_fires:
             continue
 
-        allow_n = sum(1 for ev in bucket if _guard_meta(ev).get("allow") is True)
+        allow_n = sum(1 for ev in bucket if get_guard_meta(ev).get("allow") is True)
         allow_frac = allow_n / n
         variance = min(allow_frac, 1.0 - allow_frac)
         if variance > low_variance_threshold:
@@ -138,7 +128,7 @@ def suggest_promotions(
                     "allow_count": allow_n,
                     "deny_count": n - allow_n,
                     "sample_reasons": [
-                        _guard_meta(ev).get("reason", "") for ev in bucket[:5]
+                        get_guard_meta(ev).get("reason", "") for ev in bucket[:5]
                     ],
                 },
             )
@@ -172,7 +162,7 @@ def _render_stub(
     """
     safe_name = _slugify(criterion)
     allow_count = sum(
-        1 for ev in events if _guard_meta(ev).get("allow") is True
+        1 for ev in events if get_guard_meta(ev).get("allow") is True
     )
     total = len(events)
     header = (
@@ -186,14 +176,14 @@ def _render_stub(
     # so the regex isn't anchored on dict-serialization noise like ``{'stdout':``.
     allow_outputs: list[str] = []
     for ev in events:
-        if _guard_meta(ev).get("allow") is not True:
+        if get_guard_meta(ev).get("allow") is not True:
             continue
         if not ev.output:
             continue
         # Concat string-typed leaves only, skipping _guard_meta.
         leaves: list[str] = []
         for key, value in ev.output.items():
-            if key == "_guard_meta":
+            if key == GUARD_META_KEY:
                 continue
             if isinstance(value, str):
                 leaves.append(value)
@@ -234,7 +224,7 @@ def _render_stub(
 
     # Strategy 2: shared input key shape?
     allow_inputs = [
-        dict(ev.input or {}) for ev in events if _guard_meta(ev).get("allow") is True
+        dict(ev.input or {}) for ev in events if get_guard_meta(ev).get("allow") is True
     ]
     shared_keys = _shared_top_level_keys(allow_inputs)
     if shared_keys:

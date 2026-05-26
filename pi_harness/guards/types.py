@@ -15,7 +15,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Protocol, TypedDict, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, runtime_checkable
+
+if TYPE_CHECKING:
+    from pi_harness.trajectory.schema import TrajectoryEvent
 
 
 # ---------------------------------------------------------------------------
@@ -182,15 +185,58 @@ def register_sensor(name: str):
     return deco
 
 
+# ---------------------------------------------------------------------------
+# TrajectoryEvent format — guard firings stash metadata under ``_guard_meta``
+# ---------------------------------------------------------------------------
+
+
+GUARD_META_KEY: Final[str] = "_guard_meta"
+"""Key under which :class:`GuardRunner` stashes guard-specific metadata in a
+``TrajectoryEvent.output`` mapping. Consumers (dashboards, ``promote``
+analysis, downstream plans) should read via :func:`get_guard_meta` rather
+than hard-coding the key string.
+"""
+
+
+def get_guard_meta(event: "TrajectoryEvent") -> dict[str, Any]:
+    """Return the guard metadata sub-mapping for a guide/sensor event.
+
+    Returns an empty dict if the event has no ``_guard_meta`` entry (e.g.
+    the event was not emitted by a :class:`GuardRunner`, or ``output`` is
+    ``None``). The returned dict typically carries ``guide`` / ``sensor``
+    (class name), ``guide_kind`` / ``sensor_kind`` (a :class:`GuardKind`
+    value), ``reason``, ``confidence``, ``guard_metadata``, and ``allow``.
+    """
+    output = event.output or {}
+    meta = output.get(GUARD_META_KEY, {})
+    if isinstance(meta, dict):
+        return meta
+    return {}
+
+
+def get_guard_allow(event: "TrajectoryEvent") -> bool | None:
+    """Return the ``allow`` boolean from a guide/sensor event, or ``None``.
+
+    Convenience accessor — ``outcome`` on the event is the lossy mapping
+    (allow→``success``, deny→``blocked``); this returns the original boolean
+    stashed under :data:`GUARD_META_KEY`.
+    """
+    value = get_guard_meta(event).get("allow")
+    return value if isinstance(value, bool) else None
+
+
 __all__ = [
     "ActionIntent",
     "ActionResult",
+    "GUARD_META_KEY",
     "GUIDE_REGISTRY",
     "GuardKind",
     "GuardResult",
     "Guide",
     "SENSOR_REGISTRY",
     "Sensor",
+    "get_guard_allow",
+    "get_guard_meta",
     "register_guide",
     "register_sensor",
 ]
