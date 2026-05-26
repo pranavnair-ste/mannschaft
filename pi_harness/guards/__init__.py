@@ -18,6 +18,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
+from pi_harness.guards.runner import GuardRunner
 from pi_harness.guards.types import (
     ActionIntent,
     ActionResult,
@@ -60,6 +61,7 @@ __all__ = [
     "GUIDE_REGISTRY",
     "GuardKind",
     "GuardResult",
+    "GuardRunner",
     "Guide",
     "SENSOR_REGISTRY",
     "Sensor",
