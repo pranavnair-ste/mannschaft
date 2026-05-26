@@ -114,3 +114,23 @@ When merging a plan branch (`worktree-agent-...` or `feat/...`) into `main`:
 4. **Run the full suite.** `uv run pytest --tb=short -q`. Reference counts after
    each plan lands: 31 passed (Plan 1) → 59 (+Plan 2) → 140 (+Plan 3). Two smoke
    tests skip without an `OPENAI_API_KEY` in the pytest env; that's expected.
+
+### Avoiding the stub-cleanup step on future parallel pairs
+
+Item 2 above is a cost of how Plan 3 was structured, not an inherent cost of
+parallel development. For the next pair of siblings developed concurrently, prefer
+in order:
+
+- **Local `typing.Protocol` over imported concrete type.** If a sibling only
+  needs structural attribute access on the other's types (e.g., a `.run_id` and
+  a `.corpus_refs` field), define the shape as a `Protocol` in *this* plan and
+  accept a callable returning `Iterable[ThatProtocol]`. No cross-plan import, no
+  stub.
+- **Self-erasing stub guard, if a stub is unavoidable.** Replace
+  `if pkg in sys.modules: return` with a `try: import pkg; return / except
+  ImportError: pass` pattern at the top of the installer. Once the sibling lands
+  on `main`, the real module satisfies the import and the stub never installs —
+  no cleanup commit required.
+
+Promote shared types to a `pi_harness/contracts/` module only if the same shape
+would otherwise need to be redeclared in 3+ plans.
