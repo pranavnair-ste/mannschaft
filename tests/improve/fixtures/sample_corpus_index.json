@@ -1,0 +1,41 @@
+[
+  {
+    "id": "pattern-existing-a",
+    "record_type": "pattern",
+    "classification": "tactical",
+    "body": "When refactoring auth modules, run the full test suite before commit. Captures regressions in token-rotation logic that unit tests miss.",
+    "helpful_count": 4,
+    "harmful_count": 0,
+    "contradiction_count": 0,
+    "created_at": "2025-12-01T08:00:00+00:00",
+    "last_updated_at": "2025-12-20T08:00:00+00:00",
+    "last_referenced_run_id": "run-prior-23",
+    "size_tokens": 30
+  },
+  {
+    "id": "convention-existing-b",
+    "record_type": "convention",
+    "classification": "foundational",
+    "body": "Branch names use kebab-case with a feat/fix/chore prefix.",
+    "helpful_count": 12,
+    "harmful_count": 0,
+    "contradiction_count": 0,
+    "created_at": "2025-09-01T00:00:00+00:00",
+    "last_updated_at": "2025-09-01T00:00:00+00:00",
+    "last_referenced_run_id": "run-prior-31",
+    "size_tokens": 14
+  },
+  {
+    "id": "observation-existing-c",
+    "record_type": "failure",
+    "classification": "observational",
+    "body": "Old observation about gunicorn timeout from a one-off incident. No longer relevant.",
+    "helpful_count": 0,
+    "harmful_count": 2,
+    "contradiction_count": 0,
+    "created_at": "2025-10-15T00:00:00+00:00",
+    "last_updated_at": "2025-10-15T00:00:00+00:00",
+    "last_referenced_run_id": null,
+    "size_tokens": 18
+  }
+]
