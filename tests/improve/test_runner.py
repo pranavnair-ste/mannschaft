@@ -204,3 +204,91 @@ def test_run_for_completed_run_raises_when_no_events(
 
     with pytest.raises(ImproveError):
         run_for_completed_run("run-empty", config=config, agent=MagicMock())
+
+
+def _head_sha(repo_path: Path) -> str:
+    res = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return res.stdout.strip()
+
+
+def test_no_writes_during_run(
+    tmp_path: Path,
+    sample_agent_response: str,
+) -> None:
+    """Execution-Learning Separation: no path mutates corpus outside the runner.
+
+    Simulate a "live run":
+      1. query_events.
+      2. construct ImproveAgent.
+      3. invoke summarization helpers manually.
+    None of these should advance the corpus git. Only when
+    run_for_completed_run is invoked should the git head move.
+    """
+    from pi_harness.corpus.curator import Curator
+    from pi_harness.corpus.reader import CorpusReader
+    from pi_harness.improve.agent import (
+        ImproveAgent,
+        summarize_corpus_metadata,
+        summarize_git_diff,
+        summarize_trajectory,
+    )
+    from pi_harness.improve.runner import run_for_completed_run
+    from pi_harness.trajectory.store import query_events
+
+    config = _make_config(tmp_path)
+    now = datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+    # Seed git + one corpus entry + trajectory events.
+    curator = Curator(config)
+    _seed_corpus_entry(curator, now)
+    _seed_events(config.trajectory_db_path, "run-sep-1", now, n=3)
+
+    pre_count = _commit_count(config.corpus_root)
+    pre_sha = _head_sha(config.corpus_root)
+    assert pre_count >= 1
+
+    # Simulated "live" path — read-only.
+    events = query_events(
+        run_id="run-sep-1", db_path=config.trajectory_db_path
+    )
+    assert len(events) == 3
+
+    reader = CorpusReader(config.corpus_root)
+    entries: list[CorpusEntry] = []
+    for c in Classification:
+        entries.extend(reader.find_by_classification(c))
+    assert entries  # we seeded at least one
+
+    # Construct an ImproveAgent (no LLM call).
+    fake_client = MagicMock()
+    agent = ImproveAgent(config, client=fake_client)
+    _ = agent  # constructed, not called
+
+    # Run the read-only summarizers.
+    _ = summarize_trajectory(events)
+    _ = summarize_corpus_metadata(entries)
+    _ = summarize_git_diff("")
+
+    # Corpus git MUST be unchanged.
+    assert _commit_count(config.corpus_root) == pre_count
+    assert _head_sha(config.corpus_root) == pre_sha
+
+    # Now invoke the runner with a mocked agent.
+    updates, prunes = parse_agent_response(sample_agent_response)
+    runner_agent = _make_fake_agent(updates, prunes)
+    report = run_for_completed_run(
+        "run-sep-1", config=config, agent=runner_agent
+    )
+
+    # Corpus git MUST have advanced.
+    post_count = _commit_count(config.corpus_root)
+    post_sha = _head_sha(config.corpus_root)
+    assert post_count > pre_count
+    assert post_sha != pre_sha
+    assert report.candidates_emitted == 2
