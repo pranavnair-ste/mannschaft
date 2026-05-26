@@ -89,3 +89,28 @@ write_pi_openai_profile(load_config(env_file=None), Path('profiles/pi-openai.tom
 > Plan 5 (`2026-05-25-topology-layer.md`) follows this flow already; Plan 7 consumes
 > Plan 5's `Coordinator.launch(RunSpec)` rather than touching the ClawTeam client
 > directly.
+
+## Integration / merge checklist
+
+When merging a plan branch (`worktree-agent-...` or `feat/...`) into `main`:
+
+1. **`uv sync --extra dev`** before re-running tests, every time `pyproject.toml`
+   changed. Plain `uv sync` does NOT install `[project.optional-dependencies] dev`,
+   even when its output reads like a success ("Resolved N packages / Checked N
+   packages"). If you skip this step, `uv run pytest` may fall back to a pytest
+   outside the project venv and surface misleading `ModuleNotFoundError`s on deps
+   that ARE installed in the venv (we hit this with `aiosqlite` after Plan 2's
+   merge — the test collector was the wrong pytest, not the dep that was missing).
+2. **Remove parallel-dev `sys.modules` stubs.** If a plan was developed in a
+   worktree alongside an active sibling plan, `tests/conftest.py` may have
+   installed a `sys.modules[...]` shim for the sibling's not-yet-landed module so
+   the in-progress plan could run tests in isolation. After the sibling lands, the
+   stub will shadow the real module during test collection — drop it in a
+   `chore(tests):` commit. Example: commit `0406e26` removed Plan 3's
+   `pi_harness.trajectory` stub once Plan 2 landed.
+3. **Regenerate the lockfile.** `uv lock` once. Git's textual 3-way merge of
+   parallel `uv.lock` diffs usually succeeds, but only a re-resolve guarantees
+   the lockfile is coherent against the merged `pyproject.toml`.
+4. **Run the full suite.** `uv run pytest --tb=short -q`. Reference counts after
+   each plan lands: 31 passed (Plan 1) → 59 (+Plan 2) → 140 (+Plan 3). Two smoke
+   tests skip without an `OPENAI_API_KEY` in the pytest env; that's expected.
