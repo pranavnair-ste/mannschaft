@@ -14,10 +14,10 @@ Topological order over the cross-plan dependency graph. **Plan 1 must run first*
 | 4 | Improve-agent | 2 + 3 | 10-14h | [`2026-05-25-improve-agent.md`](2026-05-25-improve-agent.md) |
 | 5 | Topology layer | 1, 3, 4 | 16-20h | [`2026-05-25-topology-layer.md`](2026-05-25-topology-layer.md) |
 | 6 | Guides + Sensors | 2 (+ alongside 5) | 12-16h | [`2026-05-25-guides-and-sensors.md`](2026-05-25-guides-and-sensors.md) |
-| 7 | Spec layer | 1, 5 | 8-10h | [`2026-05-25-spec-layer.md`](2026-05-25-spec-layer.md) |
+| 7 | Spec layer + CLI + slash command | 1, 5 | 14-18h | [`2026-05-25-spec-layer.md`](2026-05-25-spec-layer.md) |
 | 8 | Symphony UX | 2, 5, 6, 7 | 16-22h | [`2026-05-25-symphony-ux.md`](2026-05-25-symphony-ux.md) |
 
-Total ballpark: **90-130 hours** of focused engineering for v1.
+Total ballpark: **96-138 hours** of focused engineering for v1 (Plan 7 grew by 6-8h after the CLI + slash-command additions in the 2026-05-26 audit).
 
 ## Parallelizable pairs
 

@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the design-first critical path: a spec editor with linter and LLM-backed decomposer that converts versioned spec files into ClawTeam task DAGs and launches runs via the Plan 5 Coordinator.
+**Goal:** Build the design-first critical path: a spec editor with linter and LLM-backed decomposer that converts versioned spec files into ClawTeam task DAGs, exposes them over HTTP for Plan 8's dashboard, AND provides a `pi-harness` command-line entry point that drives the full spec→lint→decompose→launch pipeline from the terminal. The CLI is the canonical headless invocation surface; the slash-command skill in Claude Code is a thin Bash wrapper over it.
 
-**Architecture:** Specs live as `~/.pi-harness/specs/<spec_id>.md` files (YAML frontmatter + markdown body) for git-friendliness. A pluggable linter auto-discovers rule modules under `pi_harness/spec/lints/` and emits errors/warnings with a normalized 0-1 score. A Decomposer calls the OpenAI reasoning tier with a strict pydantic JSON schema, returns `DecomposedTask` entries that map one-to-one to ClawTeam tasks (carrying `blocked_by` chains). A FastAPI HTTP surface exposes CRUD + `/lint` + `/decompose` + `/launch` so Plan 8's dashboard can consume the layer over HTTP at `localhost:8800`.
+**Architecture:** Specs live as `~/.pi-harness/specs/<spec_id>.md` files (YAML frontmatter + markdown body) for git-friendliness. A pluggable linter auto-discovers rule modules under `pi_harness/spec/lints/` and emits errors/warnings with a normalized 0-1 score. A Decomposer calls the OpenAI reasoning tier with a strict pydantic JSON schema, returns `DecomposedTask` entries that map one-to-one to ClawTeam tasks (carrying `blocked_by` chains). A FastAPI HTTP surface exposes CRUD + `/lint` + `/decompose` + `/launch` so Plan 8's dashboard can consume the layer over HTTP at `localhost:8800`. A `typer`-based CLI (`pi-harness`) calls the same `Spec`/`Linter`/`Decomposer` modules in-process (no server required) and shells out to Plan 5's `Coordinator.launch` for execution. A Claude Code skill at `skills/pi-harness/SKILL.md` registers `/pi-harness <spec-path>` as a one-keystroke wrapper that invokes the CLI via Bash.
 
-**Tech Stack:** Python 3.10+, uv, pytest, FastAPI, uvicorn, pydantic, pyyaml, httpx (for `fastapi.testclient`), OpenAI SDK (already a Plan 5/Plan 4 dependency).
+**Tech Stack:** Python 3.11+ (matches Plan 1's bump for stdlib `tomllib`), uv, pytest, FastAPI, uvicorn, pydantic, pyyaml, httpx (for `fastapi.testclient`), OpenAI SDK (already a Plan 5/Plan 4 dependency), **typer>=0.12** for the CLI (already a transitive dep via ClawTeam; pinned explicitly so the CLI surface is stable independent of ClawTeam version bumps).
 
 ---
 
@@ -26,11 +26,16 @@ pi_harness/spec/linter.py                          # Linter class, LintResult, L
 pi_harness/spec/decomposer.py                      # Decomposer class, DecomposedTask
 pi_harness/spec/prompts/decompose_prompt.md        # versioned prompt
 pi_harness/spec/editor.py                          # FastAPI app (uvicorn.run guarded by __main__)
+pi_harness/cli.py                                  # Typer entry point — `pi-harness` binary
+pi_harness/spec/scaffold.md                        # template body used by `pi-harness spec new`
+skills/pi-harness/SKILL.md                         # Claude Code skill — `/pi-harness <spec>` wrapper
 tests/spec/__init__.py
 tests/spec/test_format.py
 tests/spec/test_linter.py
 tests/spec/test_decomposer.py
 tests/spec/test_editor.py
+tests/test_cli.py                                  # CLI unit tests via Typer's CliRunner
+tests/test_skill.py                                # skill-file frontmatter + body shape
 ```
 
 Responsibilities:
@@ -39,11 +44,15 @@ Responsibilities:
 - `linter.py` — discovery + aggregation + scoring. No file I/O.
 - `decomposer.py` — LLM call + pydantic validation + retry. Reads prompt file at module load.
 - `editor.py` — HTTP only. Delegates to format / linter / decomposer / Plan 5 Coordinator.
+- `cli.py` — Typer entry point. In-process calls to format/linter/decomposer/Coordinator. NEVER duplicates business logic — every code path is a thin shim over an existing module. The CLI is what the slash-command skill shells out to, and what a CI job would invoke for headless launches.
+- `scaffold.md` — single template string interpolated by `pi-harness spec new <id>`.
 
 Cross-plan boundaries:
 - Imports `pi_harness.config.Config` (Plan 1).
 - Imports `pi_harness.topology.coordinator.Coordinator`, `RunSpec`, `AgentSpec` (Plan 5).
+- Optionally imports `pi_harness.trajectory.store.subscribe` (Plan 2) for live event streaming in `pi-harness launch --watch`; falls back to polling `clawteam --json task list` when Plan 2 isn't installed.
 - Exports `Spec`, `LintResult`, `LintViolation`, `DecomposedTask` for Plan 8 dashboard.
+- Exposes the `pi-harness` console script via `[project.scripts]` in `pyproject.toml` — Plan 8's dashboard CLI (`pi-harness dashboard`) registers a subcommand on the same Typer `app` from `pi_harness.cli`.
 
 Storage layout (created lazily by `format.serialize_spec`):
 ```
@@ -65,13 +74,28 @@ Expected: `/Users/pranavnair/Desktop/Personal/mannschaft`
 
 Run:
 ```bash
-uv add fastapi 'uvicorn[standard]' pyyaml pydantic httpx
+uv add fastapi 'uvicorn[standard]' pyyaml pydantic httpx 'typer>=0.12,<1.0'
 uv add --dev pytest pytest-asyncio
 ```
 
-Expected: `pyproject.toml` lists `fastapi`, `uvicorn`, `pyyaml`, `pydantic`, `httpx` and dev `pytest`, `pytest-asyncio`.
+Expected: `pyproject.toml` lists `fastapi`, `uvicorn`, `pyyaml`, `pydantic`, `httpx`, `typer` and dev `pytest`, `pytest-asyncio`.
 
-If a Plan 1-6 task has already added any of these, `uv add` is idempotent — no action needed.
+If a Plan 1-6 task has already added any of these, `uv add` is idempotent — no action needed. (`typer` is already a transitive dep via ClawTeam, but pin it explicitly here so the CLI doesn't break if ClawTeam unpins it.)
+
+Also add the console script entry in `pyproject.toml` (paste under `[project]`, adjacent to `dependencies = [...]`):
+
+```toml
+[project.scripts]
+pi-harness = "pi_harness.cli:app"
+```
+
+After editing, run `uv sync --extra dev` so the script is installed into `.venv/bin/pi-harness`. Verify:
+
+```bash
+uv run pi-harness --help
+```
+
+Expected: a typer-style help banner. (Will fail until Task 13 lands `pi_harness/cli.py`, which is fine — this setup step is just registering the entry point so later tasks can iterate.)
 
 - [ ] **Setup Step 3: Confirm Plan 1 and Plan 5 modules exist**
 
@@ -84,7 +108,7 @@ If either is missing, STOP — this plan depends on Plan 1 (`Config`) and Plan 5
 
 Run:
 ```bash
-mkdir -p pi_harness/spec/lints pi_harness/spec/prompts tests/spec
+mkdir -p pi_harness/spec/lints pi_harness/spec/prompts tests/spec skills/pi-harness
 touch pi_harness/spec/__init__.py pi_harness/spec/lints/__init__.py tests/spec/__init__.py
 ```
 
@@ -2183,21 +2207,898 @@ git commit -m "feat(spec): add /launch route bridging spec to Plan 5 Coordinator
 
 ---
 
-## Task 13: Full suite + smoke check
+## Task 13: CLI scaffold — `pi-harness` Typer app
 
-- [ ] **Step 1: Run the entire spec test suite**
+**Files:**
+- Create: `pi_harness/cli.py`
+- Test: `tests/test_cli.py`
 
-Run: `uv run pytest tests/spec/ -v`
-Expected: every test in `test_format.py`, `test_linter.py`, `test_decomposer.py`, `test_editor.py` PASSES. Track count — should be roughly 30+.
+The CLI is one Typer `app` that other plans can extend (Plan 8 registers a `dashboard` subcommand on it). Task 13 lands ONLY the scaffold + `--help` + `--version`. Later tasks (14-17) wire subcommands.
+
+- [ ] **Step 1: Write the failing test** at `/Users/pranavnair/Desktop/Personal/mannschaft/tests/test_cli.py`:
+
+```python
+"""Smoke tests for the pi-harness CLI."""
+from __future__ import annotations
+
+from typer.testing import CliRunner
+
+runner = CliRunner()
+
+
+def test_app_imports():
+    """Importable as `pi_harness.cli.app`."""
+    from pi_harness.cli import app
+    assert app is not None
+
+
+def test_help_runs_cleanly():
+    from pi_harness.cli import app
+
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "pi-harness" in result.stdout.lower()
+
+
+def test_version_flag():
+    from pi_harness.cli import app
+
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    # Plan 1 exports __version__; the CLI should print it.
+    from pi_harness import __version__
+    assert __version__ in result.stdout
+```
+
+Run: `uv run pytest tests/test_cli.py -v` → expect `ModuleNotFoundError`.
+
+- [ ] **Step 2: Implement** `/Users/pranavnair/Desktop/Personal/mannschaft/pi_harness/cli.py`:
+
+```python
+"""pi-harness command-line entry point.
+
+Subcommands land in Tasks 14-17:
+
+  pi-harness launch <spec>      — lint → decompose → Coordinator.launch
+  pi-harness lint <spec>        — pure linter; exits 0/1/2 by severity
+  pi-harness decompose <spec>   — print JSON task list; gated on lint score 1.0
+  pi-harness spec new|edit|     — manage `~/.pi-harness/specs/*.md`
+              show|rm|ls
+  pi-harness serve              — boot the FastAPI editor (was `python -m
+                                  pi_harness.spec.editor`)
+
+Plan 8 registers `pi-harness dashboard` on the same Typer `app`.
+"""
+from __future__ import annotations
+
+import typer
+
+from pi_harness import __version__
+
+app = typer.Typer(
+    name="pi-harness",
+    help="Pi-Agent Harness — spec-driven multi-agent run launcher.",
+    no_args_is_help=True,
+    add_completion=False,
+)
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(__version__)
+        raise typer.Exit()
+
+
+@app.callback()
+def _root(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the pi-harness version and exit.",
+    ),
+) -> None:
+    """Root callback — owns `--version` so all subcommands inherit it."""
+
+
+# Subcommands are registered in Tasks 14-17 via app.command() decorators below.
+# Keep this module short — the per-subcommand logic lives in dedicated handlers.
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind address."),
+    port: int = typer.Option(8800, "--port", help="Bind port (default 8800; 8080 is ClawTeam's board)."),
+) -> None:
+    """Boot the FastAPI spec editor (same as `python -m pi_harness.spec.editor`)."""
+    import uvicorn
+    from pi_harness.spec.editor import app as fastapi_app
+    uvicorn.run(fastapi_app, host=host, port=port, reload=False)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    app()
+```
+
+- [ ] **Step 3: Re-run** `uv run pytest tests/test_cli.py -v` — expect 3 passed.
+
+- [ ] **Step 4: Smoke the installed binary.** Re-sync so the `[project.scripts]` entry from Pre-Task Setup actually points at the new module:
+
+```bash
+uv sync --extra dev
+uv run pi-harness --version
+uv run pi-harness --help
+```
+
+Expected: version prints `0.1.0` (matches `pi_harness.__version__`); `--help` shows the banner.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add pi_harness/cli.py tests/test_cli.py pyproject.toml uv.lock
+git commit -m "feat(cli): add pi-harness Typer scaffold with --help and --version"
+```
+
+---
+
+## Task 14: `pi-harness launch <spec>` — direct-mode in-process launch
+
+The headline use case: point `pi-harness` at a spec file and have it lint → decompose → launch through Plan 5's Coordinator without standing up a server.
+
+**Flags:**
+- `--allow-warnings` — proceed even if lint reports warnings (errors always block).
+- `--detach` — return the run_id immediately; don't watch.
+- `--watch` (default when not `--detach`) — tail trajectory events from Plan 2 if installed, else poll `clawteam --json task list <team>` every 2s. Print status + step transitions to stdout.
+- `--timeout <seconds>` — passed to `Coordinator.wait_for_completion`; default 1800.
+- `--api-url <url>` — instead of in-process launch, POST to `<url>/specs/<id>/launch`. Useful when the FastAPI editor is already running and you want the dashboard to see the run.
+
+**Files:**
+- Edit: `pi_harness/cli.py` (add `launch` subcommand)
+- Test: `tests/test_cli.py` (extend)
+
+- [ ] **Step 1: Append failing tests** to `tests/test_cli.py`:
+
+```python
+import json
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+
+@pytest.fixture
+def good_spec(tmp_path: Path) -> Path:
+    """A spec that lints cleanly. Reuses the linter test fixture."""
+    body = (
+        "---\n"
+        "spec_id: cli-smoke\n"
+        "title: Add dark mode toggle\n"
+        "topology: sequential\n"
+        "sync_mode: per_agent\n"
+        "agents:\n"
+        "  - { name: lead, role: orchestrator, model_tier: reasoning }\n"
+        "  - { name: builder-a, role: builder, model_tier: fast }\n"
+        "acceptance_criteria:\n"
+        "  - Toggle persists across loads.\n"
+        "  - WCAG AAA contrast in dark mode.\n"
+        "---\n"
+        "# Goal\nAdd a dark mode toggle to settings.\n"
+    )
+    p = tmp_path / "cli-smoke.md"
+    p.write_text(body)
+    return p
+
+
+def test_launch_calls_coordinator_with_decomposed_tasks(good_spec, monkeypatch):
+    """`pi-harness launch <spec>` lints, decomposes, then invokes Coordinator.launch."""
+    from pi_harness.cli import app
+
+    fake_handle = MagicMock(run_id="run-abc", team_name="team-abc")
+    fake_coord = MagicMock()
+    fake_coord.launch.return_value = fake_handle
+    fake_coord.wait_for_completion.return_value = MagicMock(success=True)
+
+    monkeypatch.setattr(
+        "pi_harness.cli._make_coordinator", lambda cfg: fake_coord
+    )
+    # Avoid hitting OpenAI: pre-canned decomposed tasks.
+    monkeypatch.setattr(
+        "pi_harness.cli._decompose_or_die",
+        lambda spec, cfg: [
+            MagicMock(id="t1", description="d1", blocked_by=[], assigned_role="builder"),
+        ],
+    )
+
+    result = runner.invoke(app, ["launch", str(good_spec), "--detach"])
+    assert result.exit_code == 0, result.stdout
+    assert "run-abc" in result.stdout
+    fake_coord.launch.assert_called_once()
+
+
+def test_launch_blocks_on_lint_errors(tmp_path, monkeypatch):
+    """A spec with empty acceptance_criteria must exit non-zero before calling Coordinator."""
+    from pi_harness.cli import app
+
+    bad = tmp_path / "bad.md"
+    bad.write_text(
+        "---\nspec_id: bad\ntitle: t\ntopology: sequential\n"
+        "sync_mode: per_agent\nagents: []\nacceptance_criteria: []\n---\n"
+    )
+
+    fake_coord = MagicMock()
+    monkeypatch.setattr("pi_harness.cli._make_coordinator", lambda cfg: fake_coord)
+
+    result = runner.invoke(app, ["launch", str(bad)])
+    assert result.exit_code != 0
+    assert "lint" in result.stdout.lower() or "error" in result.stdout.lower()
+    fake_coord.launch.assert_not_called()
+
+
+def test_launch_allow_warnings_bypasses_warnings_only(good_spec, monkeypatch):
+    """`--allow-warnings` lets a warning-only spec through."""
+    from pi_harness.cli import app
+    from pi_harness.spec.linter import LintResult, LintViolation
+
+    fake_lint = LintResult(
+        score=0.8,
+        violations=[LintViolation(rule_name="vague_terms", severity="warning",
+                                  message="vague", location="body:line=3")],
+    )
+    monkeypatch.setattr("pi_harness.cli._lint_or_die",
+                        lambda spec, allow_warnings: fake_lint if allow_warnings else None)
+    monkeypatch.setattr("pi_harness.cli._decompose_or_die",
+                        lambda spec, cfg: [])
+    fake_coord = MagicMock()
+    fake_coord.launch.return_value = MagicMock(run_id="run-warn")
+    monkeypatch.setattr("pi_harness.cli._make_coordinator", lambda cfg: fake_coord)
+
+    result = runner.invoke(app, ["launch", str(good_spec), "--allow-warnings", "--detach"])
+    assert result.exit_code == 0
+```
+
+Run: `uv run pytest tests/test_cli.py -v` → 3 prior pass, 3 new fail.
+
+- [ ] **Step 2: Implement `launch`** by appending to `pi_harness/cli.py`:
+
+```python
+# ---- added in Task 14 ----------------------------------------------------- #
+from pathlib import Path
+from typing import Optional
+
+# Lazy imports inside functions keep `pi-harness --help` fast and avoid
+# pulling OpenAI / Coordinator deps unless needed.
+
+
+def _load_spec_or_die(spec_path: Path):
+    from pi_harness.spec.format import parse_spec_file
+    if not spec_path.exists():
+        typer.echo(f"error: spec file not found: {spec_path}", err=True)
+        raise typer.Exit(code=2)
+    return parse_spec_file(spec_path)
+
+
+def _lint_or_die(spec, *, allow_warnings: bool):
+    """Run the linter; exit non-zero on errors. Returns LintResult (or None
+    if the test monkeypatch wants to short-circuit)."""
+    from pi_harness.spec.linter import Linter
+
+    result = Linter().lint(spec)
+    if any(v.severity == "error" for v in result.violations):
+        typer.echo("error: spec has lint errors:", err=True)
+        for v in result.violations:
+            if v.severity == "error":
+                typer.echo(f"  [{v.rule_name}] {v.message} ({v.location})", err=True)
+        raise typer.Exit(code=1)
+    if not allow_warnings and any(v.severity == "warning" for v in result.violations):
+        typer.echo("error: spec has lint warnings (use --allow-warnings to proceed):", err=True)
+        for v in result.violations:
+            if v.severity == "warning":
+                typer.echo(f"  [{v.rule_name}] {v.message} ({v.location})", err=True)
+        raise typer.Exit(code=2)
+    return result
+
+
+def _decompose_or_die(spec, cfg):
+    from pi_harness.spec.decomposer import Decomposer
+    return Decomposer(cfg).decompose(spec)
+
+
+def _make_coordinator(cfg):
+    """Wire Plan 5's Coordinator with stub corpus reader / improve runner.
+
+    Plans 3 and 4 may not be installed yet; if their imports fail we fall back
+    to no-op shims. The CLI still runs the team — corpus prime and improve
+    just don't happen until those plans land.
+    """
+    from pi_harness.clawteam import ClawTeamClient
+    from pi_harness.topology.coordinator import Coordinator
+
+    client = ClawTeamClient(cfg)
+    try:
+        from pi_harness.corpus.reader import CorpusReader  # type: ignore
+        reader = CorpusReader(cfg.corpus_root)
+    except ImportError:
+        reader = _NoopReader()
+    try:
+        from pi_harness.improve.runner import run_for_completed_run  # type: ignore
+
+        class _ImproveRunner:
+            def run_for_completed_run(self, handle):
+                return run_for_completed_run(handle)
+        improve = _ImproveRunner()
+    except ImportError:
+        improve = _NoopImprove()
+
+    return Coordinator(
+        config=cfg, clawteam_client=client,
+        corpus_reader=reader, improve_runner=improve,
+    )
+
+
+class _NoopReader:
+    def prime(self, *, classifications, session_id=None):
+        return []
+
+
+class _NoopImprove:
+    def run_for_completed_run(self, handle):
+        return None
+
+
+def _watch_run(handle, *, timeout: float) -> int:
+    """Tail trajectory events (Plan 2) or poll task list. Returns process exit code."""
+    try:
+        from pi_harness.trajectory.store import subscribe  # type: ignore
+        import asyncio
+
+        async def _tail() -> None:
+            async for ev in subscribe(handle.run_id):
+                typer.echo(f"[{ev.ts:%H:%M:%S}] {ev.agent_id} {ev.classification}: {ev.tool or ''}")
+
+        asyncio.run(_tail())
+        return 0
+    except ImportError:
+        # Fallback: poll task list. Crude but works without Plan 2.
+        import time
+        from pi_harness.clawteam import ClawTeamClient
+        from pi_harness.config import load_config
+        client = ClawTeamClient(load_config())
+        deadline = time.monotonic() + timeout
+        seen_status: dict[str, str] = {}
+        while time.monotonic() < deadline:
+            for t in client.list_tasks(handle.team_name):
+                tid = t.get("task_id", "?")
+                status = t.get("status", "?")
+                if seen_status.get(tid) != status:
+                    typer.echo(f"  task={tid} status={status}")
+                    seen_status[tid] = status
+            if all(s == "completed" for s in seen_status.values()) and seen_status:
+                return 0
+            time.sleep(2.0)
+        typer.echo("error: watch timed out", err=True)
+        return 1
+
+
+@app.command()
+def launch(
+    spec_path: Path = typer.Argument(..., exists=False, help="Path to a spec .md file."),
+    allow_warnings: bool = typer.Option(False, "--allow-warnings", help="Don't block on lint warnings."),
+    detach: bool = typer.Option(False, "--detach", "-d", help="Return run_id and exit; don't watch."),
+    timeout: float = typer.Option(1800.0, "--timeout", help="wait_for_completion timeout (seconds)."),
+    api_url: Optional[str] = typer.Option(
+        None, "--api-url",
+        help="If set, POST to <url>/specs/<id>/launch instead of launching in-process.",
+    ),
+) -> None:
+    """Launch a Pi-Agent Harness run from a spec file."""
+    from pi_harness.config import load_config
+
+    spec = _load_spec_or_die(spec_path)
+    _lint_or_die(spec, allow_warnings=allow_warnings)
+    cfg = load_config()
+
+    if api_url:
+        # API mode: defer launch to the running spec-editor server.
+        import httpx
+        r = httpx.post(f"{api_url.rstrip('/')}/specs/{spec.spec_id}/launch", timeout=30.0)
+        r.raise_for_status()
+        typer.echo(r.json().get("run_id", ""))
+        return
+
+    tasks = _decompose_or_die(spec, cfg)
+    coord = _make_coordinator(cfg)
+    handle = coord.launch(_spec_to_runspec(spec, tasks))
+    typer.echo(handle.run_id)
+
+    if detach:
+        return
+
+    exit_code = _watch_run(handle, timeout=timeout)
+    result = coord.wait_for_completion(handle, timeout=timeout)
+    coord.on_completion(handle)
+    if not result.success:
+        raise typer.Exit(code=exit_code or 1)
+
+
+def _spec_to_runspec(spec, tasks):
+    """Bridge `Spec` + decomposed tasks → Plan 5 RunSpec. Pulls field names
+    from Plan 5; if Plan 5 renames fields, edit this function only."""
+    from pi_harness.topology.base import (
+        AgentSpec, ModelTier, Role, RunSpec, SyncMode, TopologyMode,
+    )
+    return RunSpec(
+        goal=spec.title,
+        agents=[
+            AgentSpec(
+                name=a["name"],
+                role=Role(a["role"]),
+                model_tier=ModelTier(a["model_tier"]),
+                task_prompt=None,
+            )
+            for a in spec.agents
+        ],
+        mode=TopologyMode(spec.topology),
+        sync_mode=SyncMode(spec.sync_mode),
+        corpus_classifications=getattr(spec, "corpus_classifications", []),
+        session_id=getattr(spec, "session_id", None),
+    )
+```
+
+- [ ] **Step 3: Re-run** `uv run pytest tests/test_cli.py -v` — expect 6 passed.
+
+- [ ] **Step 4: Commit.**
+
+```bash
+git add pi_harness/cli.py tests/test_cli.py
+git commit -m "feat(cli): add pi-harness launch <spec> with lint+decompose+coordinator"
+```
+
+---
+
+## Task 15: `pi-harness lint` and `pi-harness decompose`
+
+These are introspection subcommands that let an engineer iterate on spec quality without launching. `lint` exits with severity-based codes (0 = clean, 1 = error, 2 = warning). `decompose` requires lint score 1.0 and prints the JSON task list to stdout.
+
+**Files:**
+- Edit: `pi_harness/cli.py` (add `lint` + `decompose`)
+- Test: `tests/test_cli.py` (extend)
+
+- [ ] **Step 1: Append failing tests** to `tests/test_cli.py`:
+
+```python
+def test_lint_clean_exits_zero(good_spec):
+    from pi_harness.cli import app
+    result = runner.invoke(app, ["lint", str(good_spec)])
+    assert result.exit_code == 0
+    assert "score" in result.stdout.lower() or "ok" in result.stdout.lower()
+
+
+def test_lint_errors_exit_one(tmp_path):
+    from pi_harness.cli import app
+    bad = tmp_path / "bad.md"
+    bad.write_text(
+        "---\nspec_id: bad\ntitle: t\ntopology: sequential\nsync_mode: per_agent\n"
+        "agents: []\nacceptance_criteria: []\n---\n"
+    )
+    result = runner.invoke(app, ["lint", str(bad)])
+    assert result.exit_code == 1
+
+
+def test_decompose_emits_json_task_list(good_spec, monkeypatch):
+    from pi_harness.cli import app
+
+    fake_task = MagicMock()
+    fake_task.model_dump.return_value = {
+        "id": "t1", "name": "n", "description": "d",
+        "acceptance_criterion": "ac", "blocked_by": [], "assigned_role": "builder",
+    }
+    monkeypatch.setattr(
+        "pi_harness.cli._decompose_or_die",
+        lambda spec, cfg: [fake_task],
+    )
+
+    result = runner.invoke(app, ["decompose", str(good_spec)])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert isinstance(payload, list)
+    assert payload[0]["id"] == "t1"
+
+
+def test_decompose_refuses_imperfect_lint(tmp_path):
+    """Decompose must refuse when lint score < 1.0 (matches /decompose API behavior)."""
+    from pi_harness.cli import app
+    warn = tmp_path / "warn.md"
+    # Spec missing acceptance criteria → lint error → decompose blocks.
+    warn.write_text(
+        "---\nspec_id: warn\ntitle: t\ntopology: sequential\nsync_mode: per_agent\n"
+        "agents: []\nacceptance_criteria: []\n---\n"
+    )
+    result = runner.invoke(app, ["decompose", str(warn)])
+    assert result.exit_code != 0
+```
+
+- [ ] **Step 2: Implement** by appending to `pi_harness/cli.py`:
+
+```python
+@app.command()
+def lint(
+    spec_path: Path = typer.Argument(..., help="Path to a spec .md file."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of pretty text."),
+) -> None:
+    """Lint a spec file. Exit code: 0 clean, 1 errors, 2 warnings."""
+    spec = _load_spec_or_die(spec_path)
+    from pi_harness.spec.linter import Linter
+    result = Linter().lint(spec)
+
+    if json_output:
+        import json as _json
+        typer.echo(_json.dumps({
+            "score": result.score,
+            "violations": [
+                {"rule": v.rule_name, "severity": v.severity,
+                 "message": v.message, "location": v.location}
+                for v in result.violations
+            ],
+        }))
+    else:
+        typer.echo(f"score: {result.score:.2f}")
+        for v in result.violations:
+            typer.echo(f"  [{v.severity}] {v.rule_name}: {v.message} ({v.location})")
+
+    if any(v.severity == "error" for v in result.violations):
+        raise typer.Exit(code=1)
+    if any(v.severity == "warning" for v in result.violations):
+        raise typer.Exit(code=2)
+
+
+@app.command()
+def decompose(
+    spec_path: Path = typer.Argument(..., help="Path to a spec .md file."),
+) -> None:
+    """Decompose a clean spec into ClawTeam-ready tasks. Refuses if lint < 1.0."""
+    import json as _json
+    from pi_harness.config import load_config
+    from pi_harness.spec.linter import Linter
+
+    spec = _load_spec_or_die(spec_path)
+    lint_result = Linter().lint(spec)
+    if lint_result.score < 1.0:
+        typer.echo(
+            f"error: lint score is {lint_result.score:.2f}; decomposer requires 1.0",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    cfg = load_config()
+    tasks = _decompose_or_die(spec, cfg)
+    typer.echo(_json.dumps([t.model_dump() for t in tasks], indent=2))
+```
+
+- [ ] **Step 3: Re-run** `uv run pytest tests/test_cli.py -v` — expect 10 passed.
+
+- [ ] **Step 4: Commit.**
+
+```bash
+git add pi_harness/cli.py tests/test_cli.py
+git commit -m "feat(cli): add pi-harness lint and pi-harness decompose"
+```
+
+---
+
+## Task 16: `pi-harness spec` subcommands — new / edit / show / rm / ls
+
+Manages spec files at `~/.pi-harness/specs/<id>.md`. The `spec new` template lives at `pi_harness/spec/scaffold.md` so engineers can edit it without touching code.
+
+**Files:**
+- Edit: `pi_harness/cli.py` (add `spec` Typer sub-app)
+- Create: `pi_harness/spec/scaffold.md`
+- Test: `tests/test_cli.py` (extend)
+
+- [ ] **Step 1: Write the scaffold template** at `/Users/pranavnair/Desktop/Personal/mannschaft/pi_harness/spec/scaffold.md`:
+
+```markdown
+---
+spec_id: __SPEC_ID__
+title: __TITLE__
+topology: sequential
+sync_mode: per_agent
+session_id: null
+corpus_classifications: []
+agents:
+  - { name: lead,      role: orchestrator, model_tier: reasoning }
+  - { name: builder-a, role: builder,      model_tier: fast }
+acceptance_criteria:
+  - "Replace this with a concrete, measurable acceptance criterion."
+---
+
+# Goal
+
+(Write the user-facing goal in 1-3 sentences. The decomposer will use this to seed tasks.)
+
+# Non-goals
+
+- (Optional list of out-of-scope items the agents should refuse.)
+
+# Notes
+
+(Anything else the agents should know — domain facts, conventions, prior art.)
+```
+
+- [ ] **Step 2: Append failing tests** to `tests/test_cli.py`:
+
+```python
+def test_spec_new_creates_file(tmp_path, monkeypatch):
+    from pi_harness.cli import app
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    result = runner.invoke(app, ["spec", "new", "my-new-spec", "--title", "Test feature"])
+    assert result.exit_code == 0, result.stdout
+    target = tmp_path / "specs" / "my-new-spec.md"
+    assert target.exists()
+    body = target.read_text()
+    assert "spec_id: my-new-spec" in body
+    assert "title: Test feature" in body
+
+
+def test_spec_new_refuses_existing(tmp_path, monkeypatch):
+    from pi_harness.cli import app
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    runner.invoke(app, ["spec", "new", "dup", "--title", "x"])
+    result = runner.invoke(app, ["spec", "new", "dup", "--title", "x"])
+    assert result.exit_code != 0
+
+
+def test_spec_ls_lists_existing(tmp_path, monkeypatch):
+    from pi_harness.cli import app
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    runner.invoke(app, ["spec", "new", "a", "--title", "A"])
+    runner.invoke(app, ["spec", "new", "b", "--title", "B"])
+    result = runner.invoke(app, ["spec", "ls"])
+    assert result.exit_code == 0
+    assert "a" in result.stdout
+    assert "b" in result.stdout
+
+
+def test_spec_show_prints_file(tmp_path, monkeypatch):
+    from pi_harness.cli import app
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    runner.invoke(app, ["spec", "new", "showme", "--title", "Show me"])
+    result = runner.invoke(app, ["spec", "show", "showme"])
+    assert result.exit_code == 0
+    assert "Show me" in result.stdout
+
+
+def test_spec_rm_force_deletes(tmp_path, monkeypatch):
+    from pi_harness.cli import app
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    runner.invoke(app, ["spec", "new", "doomed", "--title", "Doomed"])
+    target = tmp_path / "specs" / "doomed.md"
+    assert target.exists()
+    result = runner.invoke(app, ["spec", "rm", "doomed", "--force"])
+    assert result.exit_code == 0
+    assert not target.exists()
+```
+
+- [ ] **Step 3: Implement** by appending to `pi_harness/cli.py`:
+
+```python
+spec_app = typer.Typer(help="Manage spec files under ~/.pi-harness/specs/.")
+app.add_typer(spec_app, name="spec")
+
+
+def _specs_dir() -> Path:
+    import os
+    home = Path(os.environ.get("PI_HARNESS_HOME", str(Path.home() / ".pi-harness")))
+    d = home / "specs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+@spec_app.command("new")
+def spec_new(
+    spec_id: str = typer.Argument(..., help="Slug (e.g. dark-mode-toggle)."),
+    title: str = typer.Option(..., "--title", "-t", help="Human-readable title."),
+    force: bool = typer.Option(False, "--force", help="Overwrite if exists."),
+) -> None:
+    target = _specs_dir() / f"{spec_id}.md"
+    if target.exists() and not force:
+        typer.echo(f"error: {target} already exists (pass --force to overwrite)", err=True)
+        raise typer.Exit(code=1)
+    template = (Path(__file__).parent / "spec" / "scaffold.md").read_text()
+    body = template.replace("__SPEC_ID__", spec_id).replace("__TITLE__", title)
+    target.write_text(body)
+    typer.echo(str(target))
+
+
+@spec_app.command("ls")
+def spec_ls() -> None:
+    for f in sorted(_specs_dir().glob("*.md")):
+        typer.echo(f.stem)
+
+
+@spec_app.command("show")
+def spec_show(spec_id: str) -> None:
+    target = _specs_dir() / f"{spec_id}.md"
+    if not target.exists():
+        typer.echo(f"error: {target} not found", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(target.read_text())
+
+
+@spec_app.command("rm")
+def spec_rm(
+    spec_id: str,
+    force: bool = typer.Option(False, "--force", help="Skip confirmation."),
+) -> None:
+    target = _specs_dir() / f"{spec_id}.md"
+    if not target.exists():
+        typer.echo(f"error: {target} not found", err=True)
+        raise typer.Exit(code=1)
+    if not force:
+        confirm = typer.confirm(f"Delete {target}?", default=False)
+        if not confirm:
+            typer.echo("aborted")
+            raise typer.Exit(code=0)
+    target.unlink()
+    typer.echo(f"removed {target}")
+
+
+@spec_app.command("edit")
+def spec_edit(spec_id: str) -> None:
+    """Open the spec in $EDITOR (falls back to `vi`)."""
+    import os
+    import subprocess
+    target = _specs_dir() / f"{spec_id}.md"
+    if not target.exists():
+        typer.echo(f"error: {target} not found", err=True)
+        raise typer.Exit(code=1)
+    editor = os.environ.get("EDITOR", "vi")
+    subprocess.run([editor, str(target)], check=False)
+```
+
+- [ ] **Step 4: Re-run** `uv run pytest tests/test_cli.py -v` — expect 15 passed.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add pi_harness/cli.py pi_harness/spec/scaffold.md tests/test_cli.py
+git commit -m "feat(cli): add pi-harness spec new/ls/show/rm/edit"
+```
+
+---
+
+## Task 17: Claude Code skill wrapper
+
+Registers `/pi-harness` as a slash command inside Claude Code. The skill body is a thin instruction file that tells Claude to shell out to the `pi-harness` CLI via Bash.
+
+**Files:**
+- Create: `skills/pi-harness/SKILL.md`
+- Test: `tests/test_skill.py`
+
+- [ ] **Step 1: Write the failing test** at `/Users/pranavnair/Desktop/Personal/mannschaft/tests/test_skill.py`:
+
+```python
+"""Validate the Claude Code skill file shape."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+
+SKILL_PATH = Path(__file__).resolve().parents[1] / "skills" / "pi-harness" / "SKILL.md"
+
+
+def test_skill_file_exists():
+    assert SKILL_PATH.exists(), f"missing {SKILL_PATH}"
+
+
+def test_skill_has_frontmatter():
+    text = SKILL_PATH.read_text()
+    assert text.startswith("---\n")
+    end = text.find("\n---\n", 4)
+    assert end > 0, "frontmatter not terminated"
+    front = yaml.safe_load(text[4:end])
+    # Required Claude Code skill keys.
+    assert front["name"] == "pi-harness"
+    assert front.get("description"), "description required"
+
+
+def test_skill_body_mentions_bash_invocation():
+    """The skill must instruct Claude to shell out to `pi-harness` via Bash."""
+    text = SKILL_PATH.read_text()
+    assert "Bash" in text or "bash" in text
+    assert "pi-harness launch" in text
+```
+
+Run: `uv run pytest tests/test_skill.py -v` → expect failure (file missing).
+
+- [ ] **Step 2: Write the skill file** at `/Users/pranavnair/Desktop/Personal/mannschaft/skills/pi-harness/SKILL.md`:
+
+````markdown
+---
+name: pi-harness
+description: Launch a Pi-Agent Harness run from a spec file. Use when the user types `/pi-harness <spec-id-or-path>` to kick off a multi-agent build via the pi-harness CLI; this skill shells out to `pi-harness launch` via Bash and surfaces the output so the user can watch the run.
+---
+
+# pi-harness
+
+**Use when:** The user invokes `/pi-harness <arg>` where `<arg>` is either
+- A spec file path (`/path/to/spec.md`), or
+- A spec ID (resolved to `~/.pi-harness/specs/<id>.md`).
+
+## What to do
+
+1. **Resolve the spec path.** If the argument is an absolute or relative path that exists, use it. Otherwise, treat it as a spec_id and resolve to `~/.pi-harness/specs/<id>.md`. Verify the file exists with `ls -la <path>` before launching; if it doesn't, ask the user to clarify or offer to scaffold one via `pi-harness spec new`.
+
+2. **Lint first.** Run `pi-harness lint <path>` via Bash. If exit code is non-zero, surface the output to the user and STOP. Offer to help them fix the violations rather than auto-launching a flawed spec.
+
+3. **Launch.** If lint passes, run `pi-harness launch <path>` via Bash. The CLI streams events to stdout — the user sees agent activity in real time. The skill's job is just to start it and pass through.
+
+4. **Don't add flags the user didn't ask for.** No `--detach` (default is watch). No `--allow-warnings` (let the linter block warning-spec by default). If the user explicitly asks for either, pass it through.
+
+5. **On non-zero exit,** report the run_id (if printed) and the tail of the output. The user may want to inspect the trajectory store or branch from a partial run.
+
+## What NOT to do
+
+- Don't try to fix a failing spec by editing it yourself; ask the user.
+- Don't run `pi-harness decompose` first — `pi-harness launch` already does that, and running it twice burns OpenAI credit unnecessarily.
+- Don't run `pi-harness spec new` without the user asking; that's a separate intent.
+- Don't shell out to `clawteam` directly — the whole point of this CLI is that the agentic orchestration is hidden behind one command.
+
+## Installation
+
+To register this skill with Claude Code, symlink the directory into your plugins cache:
+
+```bash
+mkdir -p ~/.claude/plugins/local
+ln -sfn /Users/pranavnair/Desktop/Personal/mannschaft/skills/pi-harness ~/.claude/plugins/local/pi-harness
+```
+
+Then restart Claude Code; `/pi-harness <arg>` should appear in the slash-command menu.
+````
+
+- [ ] **Step 3: Re-run** `uv run pytest tests/test_skill.py -v` — expect 3 passed.
+
+- [ ] **Step 4: Commit.**
+
+```bash
+git add skills/pi-harness/SKILL.md tests/test_skill.py
+git commit -m "feat(skill): add /pi-harness Claude Code slash-command wrapper"
+```
+
+---
+
+## Task 18: Full suite + smoke check
+
+- [ ] **Step 1: Run the entire spec test suite + CLI + skill tests**
+
+Run: `uv run pytest tests/spec/ tests/test_cli.py tests/test_skill.py -v`
+Expected: every test in `test_format.py`, `test_linter.py`, `test_decomposer.py`, `test_editor.py`, `test_cli.py` (15), `test_skill.py` (3) PASSES. Track count — should be roughly 50+.
 
 - [ ] **Step 2: Manual smoke — open the OpenAPI doc**
 
-Run (in one terminal): `uv run python -m pi_harness.spec.editor &` then `sleep 1 && curl -s http://127.0.0.1:8800/openapi.json | head -40`. Stop the server with `kill %1`.
+Run (in one terminal): `uv run pi-harness serve &` then `sleep 1 && curl -s http://127.0.0.1:8800/openapi.json | head -40`. Stop the server with `kill %1`.
 Expected: JSON OpenAPI document lists `/specs`, `/specs/{spec_id}`, `/specs/{spec_id}/lint`, `/specs/{spec_id}/decompose`, `/specs/{spec_id}/launch`.
 
-(Skip this step if Plan 1's `load_config()` raises because `OPENAI_API_KEY` is unset — the routes will still register; only `load_config()` may explode. In that case substitute `uv run python -c "from pi_harness.spec.editor import app; import json; print(json.dumps(app.openapi(), indent=2)[:600])"` which builds the OpenAPI doc without touching `Config`.)
+(If `pi-harness serve` isn't wired yet because Task 13 only landed the scaffold, fall back to `uv run python -m pi_harness.spec.editor &`. Adding `serve` as a thin command on `app` is a follow-up — note it in the commit log.)
 
-- [ ] **Step 3: Final commit (only if any uncommitted changes remain)**
+- [ ] **Step 3: Manual smoke — CLI end-to-end on a fixture spec**
+
+```bash
+export PI_HARNESS_HOME=/tmp/pi-harness-smoke-$$
+uv run pi-harness spec new smoke-cli --title "Smoke CLI test"
+# Edit the scaffold's acceptance_criteria to have at least one real bullet
+# (the default scaffold has a placeholder; the linter will warn until you fix it)
+sed -i '' 's|Replace this with a concrete.*|hello.txt exists at the worktree root.|' "$PI_HARNESS_HOME/specs/smoke-cli.md"
+uv run pi-harness lint smoke-cli                # should exit 0
+uv run pi-harness decompose smoke-cli > /tmp/smoke-decomp.json  # should produce JSON
+cat /tmp/smoke-decomp.json | head -20
+```
+
+Expected: `pi-harness lint smoke-cli` exits 0, `decompose` writes a JSON array of `DecomposedTask` objects. (Skip the actual `pi-harness launch` step here; that's covered by Plan 5's smoke test.)
+
+- [ ] **Step 4: Final commit (only if any uncommitted changes remain)**
 
 Run: `git status`
 If clean, skip. Otherwise:
@@ -2218,8 +3119,10 @@ git commit -m "chore(spec): wrap up spec layer plan"
   - AC4 (decomposer produces tasks per criterion + `blocked_by` chains) → Task 8 (LLM call) + Task 12 test (`blocked_by` carries through).
   - AC5 (`/lint` returns `LintResult`; `/decompose` requires score 1.0) → Task 11 (both routes + `test_decompose_requires_perfect_score`).
   - AC6 (`/launch` builds `RunSpec` and returns `run_id`) → Task 12.
+  - AC7 (CLI invokes the spec→launch pipeline headlessly) → Task 14 (`pi-harness launch`).
+  - AC8 (Claude Code slash-command wrapper) → Task 17 (`/pi-harness <spec>`).
 - **Placeholder scan:** every step has full code; no TODOs. The single `pragma: no cover` block on `main()` is intentional (uvicorn boot can't be unit-tested cleanly) and is not a placeholder for missing logic.
-- **Type consistency:** `Spec` field names are identical across `format.py`, `linter.py` (reads `spec.acceptance_criteria` etc.), `decomposer.py` (`_spec_to_user_message`), and `editor.py` (CRUD + lint + decompose + launch all use the same dict expansion). `LintViolation(rule_name, severity, message, location)` matches in `linter.py` and every rule under `lints/`. `DecomposedTask(id, name, description, acceptance_criterion, blocked_by, assigned_role)` matches in `decomposer.py` (definition), `editor.py` (consumer), and every test.
+- **Type consistency:** `Spec` field names are identical across `format.py`, `linter.py` (reads `spec.acceptance_criteria` etc.), `decomposer.py` (`_spec_to_user_message`), and `editor.py` (CRUD + lint + decompose + launch all use the same dict expansion). `LintViolation(rule_name, severity, message, location)` matches in `linter.py` and every rule under `lints/`. `DecomposedTask(id, name, description, acceptance_criterion, blocked_by, assigned_role)` matches in `decomposer.py` (definition), `editor.py` (consumer), `cli.py` (`decompose` subcommand serializer), and every test. The CLI's `_spec_to_runspec` is the single mapping point between spec field names and Plan 5's `RunSpec` shape — if Plan 5 renames a field, edit only this function.
 
 ---
 
@@ -2228,4 +3131,7 @@ git commit -m "chore(spec): wrap up spec layer plan"
 - **Linter rule list is configurable at two levels.** (1) Per-rule wordlists via env var — currently only `vague_terms` uses `PI_HARNESS_VAGUE_WORDS`. (2) Rule enable/disable is NOT configurable in this plan; every module in `pi_harness/spec/lints/` runs. If a future plan adds a `PI_HARNESS_LINT_DISABLE` env var (comma-separated rule names), the filter point is `Linter.__init__` — drop the matching keys from `self._rules`. Surfacing this decision to Plan 1's `Config` is a follow-up, not part of Plan 7.
 - **Port choice.** Default port is 8800 to avoid ClawTeam's `board serve --port 8080`. Override with `PI_HARNESS_SPEC_PORT`. Plan 8's dashboard must hit `localhost:8800`.
 - **Storage location.** `~/.pi-harness/specs/` by default; `PI_HARNESS_HOME` overrides the parent. Tests rely on the env var for isolation.
+- **CLI vs HTTP parity.** `pi-harness launch <spec>` and `POST /specs/{id}/launch` MUST produce identical `RunSpec` objects from the same spec file. The shared helper is `_spec_to_runspec` in `pi_harness/cli.py`; the editor route should `from pi_harness.cli import _spec_to_runspec` rather than re-implementing the mapping. If they drift, the dashboard and the CLI will launch differently-shaped runs from the same spec, which silently breaks branch/replay.
+- **Slash-command installation.** The skill file at `skills/pi-harness/SKILL.md` is shipped in the repo but NOT auto-installed into Claude Code's plugins cache. The skill body documents the symlink command (`ln -sfn .../skills/pi-harness ~/.claude/plugins/local/pi-harness`); Plan 8 may later add `pi-harness install-skill` as a convenience, but it's intentionally out of scope here.
+- **CLI direct vs API mode.** `pi-harness launch` runs in-process by default — no FastAPI server required. Pass `--api-url http://localhost:8800` if you want the dashboard to see the run (it talks to the same `/launch` endpoint Plan 8's "Launch" button uses). Direct mode is the right default for CI / headless / scripting; API mode is for "I'm watching the dashboard and want this run to show up there."
 - **OpenAI client.** `Decomposer` instantiates its own `OpenAI` client. Plan 1's `Config` only supplies the API key + reasoning-model name. If Plan 4 introduces a shared client factory, refactor `Decomposer.__init__` to consume it then.
