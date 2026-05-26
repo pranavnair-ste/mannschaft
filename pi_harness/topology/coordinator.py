@@ -62,7 +62,8 @@ class Coordinator:
         self._corpus_reader = corpus_reader
         self._improve_runner = improve_runner
         self._last_result: dict[str, RunResult] = {}  # run_id -> result
-        self._task_specs: dict[str, list] = {}        # run_id -> TaskDef list (for wait_for_completion to inspect)
+        self._task_specs: dict[str, list] = {}        # run_id -> TaskDef list; reserved for downstream callers
+        #   (e.g. dashboard / trajectory layers) to inspect the seeded DAG
 
     def launch(self, spec: RunSpec) -> RunHandle:
         registry = _get_topology_registry()

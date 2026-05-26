@@ -156,6 +156,16 @@ class TestCoordinatorWaitAndImprove:
         assert out.success is False
         assert isinstance(out.error, ClawTeamTimeout)
 
+    def test_wait_for_completion_captures_run_failure_as_error(self, coord, basic_spec):
+        from pi_harness.clawteam import ClawTeamRunFailure
+
+        handle = coord.launch(basic_spec)
+        coord._clawteam_client.wait_for_completion.side_effect = ClawTeamRunFailure("boom")
+        coord._clawteam_client.list_tasks.return_value = []
+        out = coord.wait_for_completion(handle, timeout=60)
+        assert out.success is False
+        assert isinstance(out.error, ClawTeamRunFailure)
+
     def test_on_completion_calls_improve_runner_once_on_success(self, coord, basic_spec):
         handle = coord.launch(basic_spec)
         coord._clawteam_client.wait_for_completion.return_value = True
