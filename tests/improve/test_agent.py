@@ -2,13 +2,91 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
 from pi_harness.corpus.format import Classification, CorpusEntry, RecordType
 from pi_harness.trajectory.schema import TrajectoryEvent
+
+
+# A minimal stand-in for pi_harness.config.Config; the agent only reads
+# .openai_api_key and .reasoning_model, so we don't need the full dataclass.
+@dataclass
+class _FakeConfig:
+    openai_api_key: str = "fake-key"
+    reasoning_model: str = "fake-model"
+
+
+def _make_fake_client(responses: list[str]) -> MagicMock:
+    """A MagicMock OpenAI client whose chat.completions.create returns each
+    response in turn (an Exception value is raised instead of returned)."""
+    client = MagicMock()
+    call_count = {"n": 0}
+
+    def _create(**kwargs: Any) -> Any:
+        idx = call_count["n"]
+        call_count["n"] += 1
+        if idx >= len(responses):
+            raise AssertionError(
+                f"_create called {idx + 1} times; only {len(responses)} responses queued"
+            )
+        item = responses[idx]
+        if isinstance(item, Exception):
+            raise item
+        # Shape: response.choices[0].message.content == item
+        msg = MagicMock()
+        msg.content = item
+        choice = MagicMock()
+        choice.message = msg
+        resp = MagicMock()
+        resp.choices = [choice]
+        return resp
+
+    client.chat.completions.create.side_effect = _create
+    return client
+
+
+_VALID_JSON_PAYLOAD = json.dumps(
+    {
+        "updates": [
+            {
+                "record_type": "pattern",
+                "classification": "tactical",
+                "body": "Always batch writes.",
+                "source_run_id": "run-1",
+                "source_step_ids": ["step-1"],
+                "confidence": 0.7,
+                "rationale": "Observed.",
+            }
+        ],
+        "prunes": [
+            {
+                "entry_id": "entry-1",
+                "trigger": "counter",
+                "rationale": "harmful > helpful",
+            }
+        ],
+    }
+)
+
+
+_INVALID_SCHEMA_JSON = json.dumps(
+    {
+        "updates": [
+            {
+                "record_type": "pattern",
+                "classification": "tactical",
+                # missing body, source_run_id, source_step_ids, confidence, rationale
+            }
+        ],
+        "prunes": [],
+    }
+)
 
 
 def _make_event(
@@ -224,3 +302,88 @@ def test_build_messages_includes_all_inputs() -> None:
     assert "e1" in user
     assert "file.py: +3 -0" in user
     assert "Return ONLY a JSON object" in user
+
+
+# ---------------------------------------------------------------------------
+# ImproveAgent.analyze — retry behavior
+# ---------------------------------------------------------------------------
+
+
+def test_analyze_returns_parsed_candidates() -> None:
+    """A valid LLM response yields a (updates, prunes) tuple."""
+    from pi_harness.improve.agent import ImproveAgent
+    from pi_harness.improve.candidates import (
+        CandidatePrune,
+        CandidateUpdate,
+    )
+
+    client = _make_fake_client([_VALID_JSON_PAYLOAD])
+    agent = ImproveAgent(_FakeConfig(), client=client)
+
+    updates, prunes = agent.analyze(
+        run_id="run-1",
+        events=[_make_event(agent_id="a", step_id="step-1")],
+        corpus_entries=[_make_entry(id_="entry-1", body="b")],
+        git_diff_text="",
+    )
+
+    assert len(updates) == 1
+    assert isinstance(updates[0], CandidateUpdate)
+    assert len(prunes) == 1
+    assert isinstance(prunes[0], CandidatePrune)
+    assert client.chat.completions.create.call_count == 1
+
+
+def test_analyze_retries_on_malformed_json() -> None:
+    """Non-JSON output triggers one retry, then succeeds."""
+    from pi_harness.improve.agent import ImproveAgent
+
+    client = _make_fake_client(["not json at all", _VALID_JSON_PAYLOAD])
+    agent = ImproveAgent(_FakeConfig(), client=client)
+
+    updates, prunes = agent.analyze(
+        run_id="run-1",
+        events=[_make_event(agent_id="a", step_id="step-1")],
+        corpus_entries=[],
+        git_diff_text="",
+    )
+
+    assert len(updates) == 1
+    assert len(prunes) == 1
+    assert client.chat.completions.create.call_count == 2
+
+
+def test_analyze_retries_on_schema_violation() -> None:
+    """Schema-violating JSON triggers one retry, then succeeds."""
+    from pi_harness.improve.agent import ImproveAgent
+
+    client = _make_fake_client([_INVALID_SCHEMA_JSON, _VALID_JSON_PAYLOAD])
+    agent = ImproveAgent(_FakeConfig(), client=client)
+
+    updates, prunes = agent.analyze(
+        run_id="run-1",
+        events=[_make_event(agent_id="a", step_id="step-1")],
+        corpus_entries=[],
+        git_diff_text="",
+    )
+
+    assert len(updates) == 1
+    assert len(prunes) == 1
+    assert client.chat.completions.create.call_count == 2
+
+
+def test_analyze_raises_after_max_retries() -> None:
+    """3 malformed outputs in a row raises ImproveError."""
+    from pi_harness.improve.agent import ImproveAgent, ImproveError
+
+    client = _make_fake_client(["bad1", "bad2", "bad3"])
+    agent = ImproveAgent(_FakeConfig(), client=client)
+
+    with pytest.raises(ImproveError):
+        agent.analyze(
+            run_id="run-1",
+            events=[_make_event(agent_id="a", step_id="step-1")],
+            corpus_entries=[],
+            git_diff_text="",
+        )
+    assert client.chat.completions.create.call_count == 3
