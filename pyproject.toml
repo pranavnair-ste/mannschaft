@@ -7,7 +7,10 @@ license = { text = "MIT" }
 authors = [{ name = "Pranav Nair", email = "pranav.sunilnair@stengg.com" }]
 dependencies = [
   "clawteam==0.2.*",
+  "gitpython>=3.1.50",
   "python-dotenv>=1.0,<2.0",
+  "pyyaml>=6.0.3",
+  "tiktoken>=0.13.0",
   "tomli-w>=1.0,<2.0",
 ]
 
@@ -32,3 +35,8 @@ markers = [
 ]
 addopts = "-ra --strict-markers"
 asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "freezegun>=1.5.5",
+]
