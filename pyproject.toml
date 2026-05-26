@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Pranav Nair", email = "pranav.sunilnair@stengg.com" }]
 dependencies = [
+  "aiosqlite>=0.20.0",
   "clawteam==0.2.*",
   "python-dotenv>=1.0,<2.0",
   "tomli-w>=1.0,<2.0",
