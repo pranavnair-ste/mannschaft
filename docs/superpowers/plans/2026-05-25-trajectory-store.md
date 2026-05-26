@@ -1,6 +1,6 @@
 # Trajectory Store Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build a SQLite-backed event log that captures pi-coding-agent's tool stream and ClawTeam task transitions for every harness run, doubling as the workflow checkpointer (replacing LangGraph).
 
@@ -12,7 +12,7 @@
 
 ## Task 0 — Branch setup and dependency audit
 
-- [ ] **0.1** Create a feature branch off `main`.
+- [x] **0.1** Create a feature branch off `main`.
 
   Run:
   ```bash
@@ -22,7 +22,7 @@
 
   Expected: `Switched to a new branch 'feat/trajectory-store'`.
 
-- [ ] **0.2** Verify Plan 1 outputs exist (this plan depends on them).
+- [x] **0.2** Verify Plan 1 outputs exist (this plan depends on them).
 
   Run:
   ```bash
@@ -31,7 +31,7 @@
 
   Expected: all three files listed without error. If any are missing, stop and confirm Plan 1 is complete before continuing.
 
-- [ ] **0.3** Add `aiosqlite` to `pyproject.toml` under `[project] dependencies` (alphabetically with existing deps).
+- [x] **0.3** Add `aiosqlite` to `pyproject.toml` under `[project] dependencies` (alphabetically with existing deps).
 
   Edit `/Users/pranavnair/Desktop/Personal/mannschaft/pyproject.toml`:
   - Locate the `dependencies = [...]` array.
@@ -45,7 +45,7 @@
 
   Expected: `aiosqlite` installed; no errors. If Plan 1 used a different dependency-declaration format (e.g. `[tool.poetry.dependencies]`), match that format instead — the requirement is that `import aiosqlite` works in the next step.
 
-- [ ] **0.4** Smoke-check the dependency.
+- [x] **0.4** Smoke-check the dependency.
 
   Run:
   ```bash
@@ -54,7 +54,7 @@
 
   Expected: a version string >= `0.20.0` is printed.
 
-- [ ] **0.5** Commit the dependency bump.
+- [x] **0.5** Commit the dependency bump.
 
   Run:
   ```bash
@@ -68,7 +68,7 @@
 
 ## Task 1 — Package skeleton + first failing test
 
-- [ ] **1.1** Create the package directories.
+- [x] **1.1** Create the package directories.
 
   Run:
   ```bash
@@ -78,7 +78,7 @@
 
   Expected: both directories exist.
 
-- [ ] **1.2** Write `pi_harness/trajectory/__init__.py`.
+- [x] **1.2** Write `pi_harness/trajectory/__init__.py`.
 
   Create `/Users/pranavnair/Desktop/Personal/mannschaft/pi_harness/trajectory/__init__.py`:
   ```python
@@ -105,11 +105,11 @@
   ]
   ```
 
-- [ ] **1.3** Write `tests/trajectory/__init__.py` (empty marker file).
+- [x] **1.3** Write `tests/trajectory/__init__.py` (empty marker file).
 
   Create `/Users/pranavnair/Desktop/Personal/mannschaft/tests/trajectory/__init__.py` containing exactly one blank line.
 
-- [ ] **1.4** Add the first failing test that imports the not-yet-built schema.
+- [x] **1.4** Add the first failing test that imports the not-yet-built schema.
 
   Create `/Users/pranavnair/Desktop/Personal/mannschaft/tests/trajectory/test_schema.py`:
   ```python
@@ -230,7 +230,7 @@
           )
   ```
 
-- [ ] **1.5** Run the test — confirm it fails for the expected reason.
+- [x] **1.5** Run the test — confirm it fails for the expected reason.
 
   Run:
   ```bash
@@ -239,7 +239,7 @@
 
   Expected: collection error or `ModuleNotFoundError: No module named 'pi_harness.trajectory.schema'`. This is the red phase.
 
-- [ ] **1.6** Commit the skeleton + failing test.
+- [x] **1.6** Commit the skeleton + failing test.
 
   Run:
   ```bash
@@ -253,7 +253,7 @@
 
 ## Task 2 — `TrajectoryEvent` dataclass
 
-- [ ] **2.1** Implement `pi_harness/trajectory/schema.py`.
+- [x] **2.1** Implement `pi_harness/trajectory/schema.py`.
 
   Create `/Users/pranavnair/Desktop/Personal/mannschaft/pi_harness/trajectory/schema.py`:
   ```python
@@ -365,7 +365,7 @@
           )
   ```
 
-- [ ] **2.2** Run schema tests — they must all pass.
+- [x] **2.2** Run schema tests — they must all pass.
 
   Run:
   ```bash
@@ -374,7 +374,7 @@
 
   Expected: 6 passed.
 
-- [ ] **2.3** Commit.
+- [x] **2.3** Commit.
 
   Run:
   ```bash
@@ -388,7 +388,7 @@
 
 ## Task 3 — Store: failing tests for `init_db` + `write_event`
 
-- [ ] **3.1** Write `tests/trajectory/test_store.py` covering `init_db` idempotency, `write_event`, `query_events` ordering, and `query_runs` ordering.
+- [x] **3.1** Write `tests/trajectory/test_store.py` covering `init_db` idempotency, `write_event`, `query_events` ordering, and `query_runs` ordering.
 
   Create `/Users/pranavnair/Desktop/Personal/mannschaft/tests/trajectory/test_store.py`:
   ```python
@@ -596,7 +596,7 @@
       assert "idx_events_run_agent_step" in idx
   ```
 
-- [ ] **3.2** Run — confirm failure.
+- [x] **3.2** Run — confirm failure.
 
   Run:
   ```bash
@@ -605,7 +605,7 @@
 
   Expected: `ModuleNotFoundError` or import failure for `pi_harness.trajectory.store`.
 
-- [ ] **3.3** Commit the failing tests.
+- [x] **3.3** Commit the failing tests.
 
   Run:
   ```bash
@@ -617,7 +617,7 @@
 
 ## Task 4 — Implement `store.py`
 
-- [ ] **4.1** Create `/Users/pranavnair/Desktop/Personal/mannschaft/pi_harness/trajectory/store.py`.
+- [x] **4.1** Create `/Users/pranavnair/Desktop/Personal/mannschaft/pi_harness/trajectory/store.py`.
 
   Write:
   ```python
@@ -871,7 +871,7 @@
   ]
   ```
 
-- [ ] **4.2** Run the store tests.
+- [x] **4.2** Run the store tests.
 
   Run:
   ```bash
@@ -880,7 +880,7 @@
 
   Expected: 11 passed.
 
-- [ ] **4.3** Run the schema tests too — they must still pass.
+- [x] **4.3** Run the schema tests too — they must still pass.
 
   Run:
   ```bash
@@ -889,7 +889,7 @@
 
   Expected: 17 passed (6 schema + 11 store).
 
-- [ ] **4.4** Commit.
+- [x] **4.4** Commit.
 
   Run:
   ```bash
@@ -901,7 +901,7 @@
 
 ## Task 5 — Capture: failing tests for pi-agent stream + ClawTeam polling
 
-- [ ] **5.1** Write `tests/trajectory/test_capture.py` (unit, mocked).
+- [x] **5.1** Write `tests/trajectory/test_capture.py` (unit, mocked).
 
   Create `/Users/pranavnair/Desktop/Personal/mannschaft/tests/trajectory/test_capture.py`:
   ```python
@@ -1181,7 +1181,7 @@
       assert "completed" in states_for_t1
   ```
 
-- [ ] **5.2** Run — confirm failure.
+- [x] **5.2** Run — confirm failure.
 
   Run:
   ```bash
@@ -1190,7 +1190,7 @@
 
   Expected: `ModuleNotFoundError: No module named 'pi_harness.trajectory.capture'`.
 
-- [ ] **5.3** Commit.
+- [x] **5.3** Commit.
 
   Run:
   ```bash
@@ -1202,7 +1202,7 @@
 
 ## Task 6 — Implement `capture.py`
 
-- [ ] **6.1** Confirm Plan 1's `ClawTeamClient.list_tasks` is available.
+- [x] **6.1** Confirm Plan 1's `ClawTeamClient.list_tasks` is available.
 
   Plan 1 exposes `list_tasks` as an **instance method** on `ClawTeamClient` (not a module-level function). Run:
   ```bash
@@ -1210,7 +1210,7 @@
   ```
   Expected: `ok`. The capture module below builds a `ClawTeamClient` from `Config` and calls `client.list_tasks(team_name)` from a thread-pool wrapper.
 
-- [ ] **6.2** Create `/Users/pranavnair/Desktop/Personal/mannschaft/pi_harness/trajectory/capture.py`.
+- [x] **6.2** Create `/Users/pranavnair/Desktop/Personal/mannschaft/pi_harness/trajectory/capture.py`.
 
   Write:
   ```python
@@ -1439,9 +1439,9 @@
           await asyncio.sleep(poll_interval_s)
   ```
 
-- [ ] **6.3** (resolved) The original draft assumed Plan 1 exported `list_tasks` as a module-level function. It doesn't — it's an instance method on `ClawTeamClient`. The wrapper `_clawteam_list_tasks` above bridges sync→async via `asyncio.to_thread`, and tests can patch it directly.
+- [x] **6.3** (resolved) The original draft assumed Plan 1 exported `list_tasks` as a module-level function. It doesn't — it's an instance method on `ClawTeamClient`. The wrapper `_clawteam_list_tasks` above bridges sync→async via `asyncio.to_thread`, and tests can patch it directly.
 
-- [ ] **6.4** Run the capture unit tests.
+- [x] **6.4** Run the capture unit tests.
 
   Run:
   ```bash
@@ -1450,7 +1450,7 @@
 
   Expected: 9 passed.
 
-- [ ] **6.5** Run the entire trajectory test suite to make sure nothing regressed.
+- [x] **6.5** Run the entire trajectory test suite to make sure nothing regressed.
 
   Run:
   ```bash
@@ -1459,7 +1459,7 @@
 
   Expected: 26 passed (6 schema + 11 store + 9 capture).
 
-- [ ] **6.6** Commit.
+- [x] **6.6** Commit.
 
   Run:
   ```bash
@@ -1471,7 +1471,7 @@
 
 ## Task 7 — Wire `Config.trajectory_db_path` into `init_db`'s default
 
-- [ ] **7.1** Confirm Plan 1's `Config` exposes a `trajectory_db_path` attribute.
+- [x] **7.1** Confirm Plan 1's `Config` exposes a `trajectory_db_path` attribute.
 
   Run:
   ```bash
@@ -1480,7 +1480,7 @@
 
   Expected: a path printed (e.g. `~/.pi-harness/trajectory.db` expanded). If `Config.load()` is named differently, replace it with whatever Plan 1 provides (e.g. `Config()` or `Config.from_env()`). If `trajectory_db_path` is missing, stop and reconcile with Plan 1 before proceeding.
 
-- [ ] **7.2** Add a small bootstrap helper to `pi_harness/trajectory/store.py` that uses Config when called with no args from the harness.
+- [x] **7.2** Add a small bootstrap helper to `pi_harness/trajectory/store.py` that uses Config when called with no args from the harness.
 
   In `/Users/pranavnair/Desktop/Personal/mannschaft/pi_harness/trajectory/store.py`, add a new function below `init_db`:
   ```python
@@ -1500,7 +1500,7 @@
 
   Also append `"init_db_from_config",` to `__all__`.
 
-- [ ] **7.3** Add a test that exercises `init_db_from_config` against a temp path via monkeypatching.
+- [x] **7.3** Add a test that exercises `init_db_from_config` against a temp path via monkeypatching.
 
   Append to `/Users/pranavnair/Desktop/Personal/mannschaft/tests/trajectory/test_store.py`:
   ```python
@@ -1519,9 +1519,9 @@
       assert target.exists()
   ```
 
-- [ ] **7.4** If Plan 1's `Config` does not have a `.load()` classmethod, replace `staticmethod(lambda: StubCfg())` in the test with whatever constructor pattern Plan 1 used (e.g. `monkeypatch.setattr(cfg_mod, "Config", lambda *_: StubCfg())`). The test's intent is "swap out the real Config-loading path with a stub that exposes `trajectory_db_path`".
+- [x] **7.4** If Plan 1's `Config` does not have a `.load()` classmethod, replace `staticmethod(lambda: StubCfg())` in the test with whatever constructor pattern Plan 1 used (e.g. `monkeypatch.setattr(cfg_mod, "Config", lambda *_: StubCfg())`). The test's intent is "swap out the real Config-loading path with a stub that exposes `trajectory_db_path`".
 
-- [ ] **7.5** Run.
+- [x] **7.5** Run.
 
   Run:
   ```bash
@@ -1530,7 +1530,7 @@
 
   Expected: 27 passed.
 
-- [ ] **7.6** Commit.
+- [x] **7.6** Commit.
 
   Run:
   ```bash
@@ -1544,7 +1544,7 @@
 
 The Plan 1 smoke test (`tests/test_smoke_launch.py`) already validates the launch/cleanup flow with a built-in `pi-smoke` 2-agent template. This task reuses the same template + Plan 1's `ClawTeamClient` to drive a real run and verify that `capture_clawteam_transitions` records at least 10 events during it.
 
-- [ ] **8.1** Confirm Plan 1's `ClawTeamClient` exposes the team-lifecycle methods we need.
+- [x] **8.1** Confirm Plan 1's `ClawTeamClient` exposes the team-lifecycle methods we need.
 
   Run:
   ```bash
@@ -1557,7 +1557,7 @@ The Plan 1 smoke test (`tests/test_smoke_launch.py`) already validates the launc
   ```
   Expected: `ok`.
 
-- [ ] **8.2** Confirm Plan 1's `clawteam_profile.build_profile_specs` is available and the smoke test reuses its specs.
+- [x] **8.2** Confirm Plan 1's `clawteam_profile.build_profile_specs` is available and the smoke test reuses its specs.
 
   Run:
   ```bash
@@ -1565,7 +1565,7 @@ The Plan 1 smoke test (`tests/test_smoke_launch.py`) already validates the launc
   ```
   Expected: `pi-openai-fast`.
 
-- [ ] **8.3** Create the smoke test.
+- [x] **8.3** Create the smoke test.
 
   Create `/Users/pranavnair/Desktop/Personal/mannschaft/tests/trajectory/test_capture_e2e.py`:
   ```python
@@ -1702,7 +1702,7 @@ The Plan 1 smoke test (`tests/test_smoke_launch.py`) already validates the launc
       ), f"smoke: expected >=10 events in 120s, got {len(events)}"
   ```
 
-- [ ] **8.4** Register the `smoke` marker in `pyproject.toml` (or `pytest.ini` if that's what Plan 1 set up) so pytest doesn't warn about it.
+- [x] **8.4** Register the `smoke` marker in `pyproject.toml` (or `pytest.ini` if that's what Plan 1 set up) so pytest doesn't warn about it.
 
   Edit `/Users/pranavnair/Desktop/Personal/mannschaft/pyproject.toml`. Under `[tool.pytest.ini_options]` (create the section if it doesn't exist), ensure:
   ```toml
@@ -1715,7 +1715,7 @@ The Plan 1 smoke test (`tests/test_smoke_launch.py`) already validates the launc
 
   If `markers` or `asyncio_mode` already exist, merge — don't duplicate.
 
-- [ ] **8.5** Verify the smoke test is collected but skipped by default.
+- [x] **8.5** Verify the smoke test is collected but skipped by default.
 
   Run:
   ```bash
@@ -1724,7 +1724,7 @@ The Plan 1 smoke test (`tests/test_smoke_launch.py`) already validates the launc
 
   Expected: 27 passed, 1 skipped (or deselected) — the e2e test is excluded because it is marked `smoke`. If the smoke test ran and failed because no ClawTeam binary is on PATH, that's also acceptable for this step; the user explicitly runs it via `-m smoke`.
 
-- [ ] **8.6** Run the smoke test (requires `clawteam` CLI on PATH).
+- [x] **8.6** Run the smoke test (requires `clawteam` CLI on PATH).
 
   Run:
   ```bash
@@ -1733,7 +1733,7 @@ The Plan 1 smoke test (`tests/test_smoke_launch.py`) already validates the launc
 
   Expected: 1 passed within ~120s. If `clawteam` isn't installed locally, the test will fail at `launch_team` — document this as a developer-machine prerequisite in `pyproject.toml`'s readme section, not here.
 
-- [ ] **8.7** Commit.
+- [x] **8.7** Commit.
 
   Run:
   ```bash
@@ -1745,16 +1745,16 @@ The Plan 1 smoke test (`tests/test_smoke_launch.py`) already validates the launc
 
 ## Task 9 — Documentation: assumed pi-agent event schema + migration approach
 
-- [ ] **9.1** Re-read the docstring at the top of `pi_harness/trajectory/capture.py`. Confirm it documents the assumed pi-agent event schema. If it does not, update it now — the engineer maintaining this file must be able to adjust to pi-agent's actual format without spelunking.
+- [x] **9.1** Re-read the docstring at the top of `pi_harness/trajectory/capture.py`. Confirm it documents the assumed pi-agent event schema. If it does not, update it now — the engineer maintaining this file must be able to adjust to pi-agent's actual format without spelunking.
 
-- [ ] **9.2** Re-read the module docstring of `pi_harness/trajectory/store.py`. Confirm it documents:
+- [x] **9.2** Re-read the module docstring of `pi_harness/trajectory/store.py`. Confirm it documents:
   - The `_migrations` table structure.
   - That v1 inserts version=1 and creates `trajectory_events` plus its indexes.
   - That future migrations append a row and run their DDL only if their version is absent.
 
   If any of these are missing, add them to the module docstring.
 
-- [ ] **9.3** Run the full trajectory test suite one last time.
+- [x] **9.3** Run the full trajectory test suite one last time.
 
   Run:
   ```bash
@@ -1763,7 +1763,7 @@ The Plan 1 smoke test (`tests/test_smoke_launch.py`) already validates the launc
 
   Expected: 27 passed.
 
-- [ ] **9.4** If any docstrings changed, commit.
+- [x] **9.4** If any docstrings changed, commit.
 
   Run:
   ```bash
@@ -1782,7 +1782,7 @@ The Plan 1 smoke test (`tests/test_smoke_launch.py`) already validates the launc
 
 ## Task 10 — Final verification
 
-- [ ] **10.1** Run the full project test suite (not just trajectory) — must not regress Plan 1.
+- [x] **10.1** Run the full project test suite (not just trajectory) — must not regress Plan 1.
 
   Run:
   ```bash
@@ -1791,7 +1791,7 @@ The Plan 1 smoke test (`tests/test_smoke_launch.py`) already validates the launc
 
   Expected: all Plan 1 tests pass + 27 trajectory tests pass + 1 smoke skipped.
 
-- [ ] **10.2** Confirm the package layout matches the spec.
+- [x] **10.2** Confirm the package layout matches the spec.
 
   Run:
   ```bash
@@ -1811,17 +1811,17 @@ The Plan 1 smoke test (`tests/test_smoke_launch.py`) already validates the launc
   tests/trajectory/test_store.py
   ```
 
-- [ ] **10.3** Acceptance criteria checklist:
+- [x] **10.3** Acceptance criteria checklist:
 
-  - [ ] (1) `init_db` creates schema on first call; idempotent — covered by `test_init_db_creates_schema` + `test_init_db_is_idempotent`.
-  - [ ] (2) `query_runs()` returns runs ordered by latest event ts desc — covered by `test_query_runs_orders_by_latest_event_desc`.
-  - [ ] (3) `query_events(run_id=X)` returns events ordered by `(ts asc, step_id asc)` — covered by `test_query_events_orders_by_ts_then_step_id`.
-  - [ ] (4) `corpus_refs` / `corpus_cited` round-trip cleanly — covered by `test_corpus_refs_round_trip_through_json` + `test_from_row_round_trips`.
-  - [ ] (5) Smoke test: real ClawTeam team produces ≥10 events in 60s — covered by `test_clawteam_smoke_emits_at_least_10_events`.
+  - [x] (1) `init_db` creates schema on first call; idempotent — covered by `test_init_db_creates_schema` + `test_init_db_is_idempotent`.
+  - [x] (2) `query_runs()` returns runs ordered by latest event ts desc — covered by `test_query_runs_orders_by_latest_event_desc`.
+  - [x] (3) `query_events(run_id=X)` returns events ordered by `(ts asc, step_id asc)` — covered by `test_query_events_orders_by_ts_then_step_id`.
+  - [x] (4) `corpus_refs` / `corpus_cited` round-trip cleanly — covered by `test_corpus_refs_round_trip_through_json` + `test_from_row_round_trips`.
+  - [x] (5) Smoke test: real ClawTeam team produces ≥10 events in 60s — covered by `test_clawteam_smoke_emits_at_least_10_events`.
 
   All five must be passing (acceptance criterion 5 may be skipped in environments without `clawteam` on PATH but must pass on the engineer's dev machine before merging).
 
-- [ ] **10.4** Push the branch and open the PR.
+- [x] **10.4** Push the branch and open the PR.
 
   Run:
   ```bash
