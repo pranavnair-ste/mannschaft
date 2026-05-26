@@ -18,7 +18,20 @@ import importlib.util
 import sys
 from pathlib import Path
 
+from pi_harness.guards.guides import (
+    AllowlistGuide,
+    PathScopeGuide,
+    RateLimitGuide,
+    SchemaValidatorGuide,
+)
+from pi_harness.guards.promote import PromotionSuggestion, suggest_promotions
 from pi_harness.guards.runner import GuardRunner
+from pi_harness.guards.sensors import (
+    ExitCodeSensor,
+    JudgeAgentSensor,
+    RegexAssertionSensor,
+    TokenBudgetSensor,
+)
 from pi_harness.guards.types import (
     ActionIntent,
     ActionResult,
@@ -56,16 +69,32 @@ def load_user_guards(directory: Path) -> None:
 
 
 __all__ = [
+    # types + protocols
     "ActionIntent",
     "ActionResult",
-    "GUIDE_REGISTRY",
     "GuardKind",
     "GuardResult",
-    "GuardRunner",
     "Guide",
-    "SENSOR_REGISTRY",
     "Sensor",
+    # registry surface
+    "GUIDE_REGISTRY",
+    "SENSOR_REGISTRY",
     "load_user_guards",
     "register_guide",
     "register_sensor",
+    # orchestrator
+    "GuardRunner",
+    # built-in guides
+    "AllowlistGuide",
+    "PathScopeGuide",
+    "RateLimitGuide",
+    "SchemaValidatorGuide",
+    # built-in sensors
+    "ExitCodeSensor",
+    "JudgeAgentSensor",
+    "RegexAssertionSensor",
+    "TokenBudgetSensor",
+    # promotion
+    "PromotionSuggestion",
+    "suggest_promotions",
 ]
