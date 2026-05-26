@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pydantic
 import pytest
 
 from pi_harness.corpus.format import Classification, RecordType
@@ -9,7 +10,30 @@ from pi_harness.improve.candidates import (
     CandidatePrune,
     CandidateUpdate,
     PruneTrigger,
+    parse_agent_response,
 )
+
+
+_VALID_PAYLOAD = {
+    "updates": [
+        {
+            "record_type": "pattern",
+            "classification": "tactical",
+            "body": "Prefer select_related for N+1",
+            "source_run_id": "run-1",
+            "source_step_ids": ["step-1"],
+            "confidence": 0.7,
+            "rationale": "Observed twice.",
+        }
+    ],
+    "prunes": [
+        {
+            "entry_id": "entry-1",
+            "trigger": "counter",
+            "rationale": "harmful > helpful",
+        }
+    ],
+}
 
 
 def test_candidate_update_roundtrip() -> None:
@@ -78,3 +102,64 @@ def test_prune_trigger_enum_values() -> None:
         "budget",
         "dedup",
     }
+
+
+def test_validator_accepts_valid_payload() -> None:
+    """A schema-compliant payload returns (list[CandidateUpdate], list[CandidatePrune])."""
+    updates, prunes = parse_agent_response(_VALID_PAYLOAD)
+    assert len(updates) == 1
+    assert len(prunes) == 1
+    assert isinstance(updates[0], CandidateUpdate)
+    assert isinstance(prunes[0], CandidatePrune)
+    assert updates[0].record_type == RecordType.PATTERN
+    assert updates[0].classification == Classification.TACTICAL
+    assert prunes[0].trigger == PruneTrigger.COUNTER
+
+
+def test_validator_rejects_missing_field() -> None:
+    """Missing required field raises pydantic.ValidationError."""
+    bad = {
+        "updates": [
+            {
+                "record_type": "pattern",
+                "classification": "tactical",
+                "body": "x",
+                "source_run_id": "r",
+                "source_step_ids": ["s"],
+                # confidence omitted
+                "rationale": "x",
+            }
+        ],
+        "prunes": [],
+    }
+    with pytest.raises(pydantic.ValidationError):
+        parse_agent_response(bad)
+
+
+def test_validator_rejects_unknown_record_type() -> None:
+    """An unknown record_type value raises validation error."""
+    bad = {
+        "updates": [
+            {
+                "record_type": "not-a-type",
+                "classification": "tactical",
+                "body": "x",
+                "source_run_id": "r",
+                "source_step_ids": ["s"],
+                "confidence": 0.5,
+                "rationale": "x",
+            }
+        ],
+        "prunes": [],
+    }
+    with pytest.raises(pydantic.ValidationError):
+        parse_agent_response(bad)
+
+
+def test_validator_accepts_json_string() -> None:
+    """A JSON string payload is parsed before validation."""
+    import json as _json
+
+    updates, prunes = parse_agent_response(_json.dumps(_VALID_PAYLOAD))
+    assert len(updates) == 1
+    assert len(prunes) == 1
