@@ -387,3 +387,79 @@ def test_analyze_raises_after_max_retries() -> None:
             git_diff_text="",
         )
     assert client.chat.completions.create.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Fixture-driven acceptance test (AC2)
+# ---------------------------------------------------------------------------
+
+
+def _event_from_dict(d: dict) -> TrajectoryEvent:
+    return TrajectoryEvent(
+        run_id=d["run_id"],
+        agent_id=d["agent_id"],
+        step_id=d["step_id"],
+        ts=datetime.fromisoformat(d["ts"]),
+        model=d["model"],
+        tool=d["tool"],
+        input=d["input"],
+        output=d["output"],
+        duration_ms=d["duration_ms"],
+        tokens_in=d["tokens_in"],
+        tokens_out=d["tokens_out"],
+        outcome=d["outcome"],
+        classification=d["classification"],
+        corpus_refs=list(d.get("corpus_refs") or []),
+        corpus_cited=list(d.get("corpus_cited") or []),
+    )
+
+
+def _entry_from_dict(d: dict) -> CorpusEntry:
+    return CorpusEntry(
+        id=d["id"],
+        record_type=RecordType(d["record_type"]),
+        classification=Classification(d["classification"]),
+        body=d["body"],
+        helpful_count=d["helpful_count"],
+        harmful_count=d["harmful_count"],
+        contradiction_count=d["contradiction_count"],
+        created_at=datetime.fromisoformat(d["created_at"]),
+        last_updated_at=datetime.fromisoformat(d["last_updated_at"]),
+        last_referenced_run_id=d.get("last_referenced_run_id"),
+        size_tokens=d["size_tokens"],
+    )
+
+
+def test_analyze_with_sample_fixtures(
+    sample_trajectory: list[dict],
+    sample_corpus_index: list[dict],
+    sample_git_diff: str,
+    sample_agent_response: str,
+) -> None:
+    """Fixture-driven end-to-end of ImproveAgent.analyze.
+
+    The fixtures cover a realistic small run (2 agents, 6 steps, 3 corpus
+    entries, a multi-file diff). The fake client returns the canned valid
+    response; we assert the parsed candidates match the expected counts
+    (2 updates, 1 prune).
+    """
+    from pi_harness.improve.agent import ImproveAgent
+
+    events = [_event_from_dict(d) for d in sample_trajectory]
+    entries = [_entry_from_dict(d) for d in sample_corpus_index]
+
+    client = _make_fake_client([sample_agent_response])
+    agent = ImproveAgent(_FakeConfig(), client=client)
+
+    updates, prunes = agent.analyze(
+        run_id="run-sample",
+        events=events,
+        corpus_entries=entries,
+        git_diff_text=sample_git_diff,
+    )
+
+    assert len(updates) == 2
+    assert len(prunes) == 1
+    assert client.chat.completions.create.call_count == 1
+    # Spot-check fields preserved correctly.
+    assert prunes[0].entry_id == "observation-existing-c"
