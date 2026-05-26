@@ -7,8 +7,8 @@ import pytest
 
 from pi_harness.corpus.format import Classification, RecordType
 from pi_harness.improve.candidates import (
-    CandidatePrune,
-    CandidateUpdate,
+    ProposedPrune,
+    ProposedUpdate,
     PruneTrigger,
     parse_agent_response,
 )
@@ -37,8 +37,8 @@ _VALID_PAYLOAD = {
 
 
 def test_candidate_update_roundtrip() -> None:
-    """A CandidateUpdate must roundtrip cleanly through to_json/from_json."""
-    original = CandidateUpdate(
+    """A ProposedUpdate must roundtrip cleanly through to_json/from_json."""
+    original = ProposedUpdate(
         record_type=RecordType.PATTERN,
         classification=Classification.TACTICAL,
         body="Always use async for IO",
@@ -48,7 +48,7 @@ def test_candidate_update_roundtrip() -> None:
         rationale="Observed 3 successes",
     )
     blob = original.to_json()
-    restored = CandidateUpdate.from_json(blob)
+    restored = ProposedUpdate.from_json(blob)
 
     assert restored.record_type == original.record_type
     assert restored.classification == original.classification
@@ -60,14 +60,14 @@ def test_candidate_update_roundtrip() -> None:
 
 
 def test_candidate_prune_roundtrip() -> None:
-    """A CandidatePrune must roundtrip cleanly through to_json/from_json."""
-    original = CandidatePrune(
+    """A ProposedPrune must roundtrip cleanly through to_json/from_json."""
+    original = ProposedPrune(
         entry_id="entry-xyz",
         trigger=PruneTrigger.COUNTER,
         rationale="harmful > helpful",
     )
     blob = original.to_json()
-    restored = CandidatePrune.from_json(blob)
+    restored = ProposedPrune.from_json(blob)
 
     assert restored.entry_id == original.entry_id
     assert restored.trigger == original.trigger
@@ -85,12 +85,12 @@ def test_candidate_update_confidence_validation() -> None:
         rationale="x",
     )
     with pytest.raises(ValueError):
-        CandidateUpdate(confidence=-0.1, **common)  # type: ignore[arg-type]
+        ProposedUpdate(confidence=-0.1, **common)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
-        CandidateUpdate(confidence=1.5, **common)  # type: ignore[arg-type]
+        ProposedUpdate(confidence=1.5, **common)  # type: ignore[arg-type]
     # Boundary values are valid.
-    CandidateUpdate(confidence=0.0, **common)  # type: ignore[arg-type]
-    CandidateUpdate(confidence=1.0, **common)  # type: ignore[arg-type]
+    ProposedUpdate(confidence=0.0, **common)  # type: ignore[arg-type]
+    ProposedUpdate(confidence=1.0, **common)  # type: ignore[arg-type]
 
 
 def test_prune_trigger_enum_values() -> None:
@@ -105,12 +105,12 @@ def test_prune_trigger_enum_values() -> None:
 
 
 def test_validator_accepts_valid_payload() -> None:
-    """A schema-compliant payload returns (list[CandidateUpdate], list[CandidatePrune])."""
+    """A schema-compliant payload returns (list[ProposedUpdate], list[ProposedPrune])."""
     updates, prunes = parse_agent_response(_VALID_PAYLOAD)
     assert len(updates) == 1
     assert len(prunes) == 1
-    assert isinstance(updates[0], CandidateUpdate)
-    assert isinstance(prunes[0], CandidatePrune)
+    assert isinstance(updates[0], ProposedUpdate)
+    assert isinstance(prunes[0], ProposedPrune)
     assert updates[0].record_type == RecordType.PATTERN
     assert updates[0].classification == Classification.TACTICAL
     assert prunes[0].trigger == PruneTrigger.COUNTER

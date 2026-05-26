@@ -1,17 +1,16 @@
-"""Improve-agent candidate dataclasses + pydantic validation.
+"""Improve-agent proposal dataclasses + pydantic validation.
 
-The improve-agent emits two flavors of candidate per completed run:
+The improve-agent emits two flavors of proposal per completed run:
 
-- :class:`CandidateUpdate` — propose adding a new corpus entry.
-- :class:`CandidatePrune` — flag an existing entry for pruning (the curator
+- :class:`ProposedUpdate` — propose adding a new corpus entry.
+- :class:`ProposedPrune` — flag an existing entry for pruning (the curator
   decides the actual graduated action).
 
-These are the LLM-emitted, JSON-serializable shapes. Plan 4's
-:mod:`pi_harness.improve.runner` converts them to the curator-input shapes
-(``pi_harness.corpus.curator.CandidateUpdate`` /
-``pi_harness.corpus.curator.CandidatePrune``) before forwarding to the
-Curator. The naming collision is deliberate-but-scoped: the LLM-facing
-contract is independent from the curator-input contract.
+These are the LLM-emitted, JSON-serializable shapes. The runner converts
+them to the curator-input shapes (``pi_harness.corpus.curator.CandidateUpdate``
+/ ``pi_harness.corpus.curator.CandidatePrune``) before forwarding to the
+Curator. The two contracts are intentionally distinct: the improve-agent
+proposes; the curator consumes.
 """
 
 from __future__ import annotations
@@ -26,8 +25,8 @@ import pydantic
 from pi_harness.corpus.format import Classification, RecordType
 
 __all__ = [
-    "CandidatePrune",
-    "CandidateUpdate",
+    "ProposedPrune",
+    "ProposedUpdate",
     "PruneTrigger",
     "parse_agent_response",
 ]
@@ -57,7 +56,7 @@ def _default(obj: Any) -> Any:
 
 
 @dataclass(frozen=True)
-class CandidateUpdate:
+class ProposedUpdate:
     """A proposed new corpus entry.
 
     Attributes:
@@ -91,7 +90,7 @@ class CandidateUpdate:
         return json.dumps(asdict(self), default=_default, sort_keys=True)
 
     @classmethod
-    def from_json(cls, s: str) -> "CandidateUpdate":
+    def from_json(cls, s: str) -> "ProposedUpdate":
         """Deserialize from a JSON string (enum values are re-hydrated)."""
         data = json.loads(s)
         return cls(
@@ -106,7 +105,7 @@ class CandidateUpdate:
 
 
 @dataclass(frozen=True)
-class CandidatePrune:
+class ProposedPrune:
     """A flag asking the curator to prune an existing entry.
 
     Attributes:
@@ -124,7 +123,7 @@ class CandidatePrune:
         return json.dumps(asdict(self), default=_default, sort_keys=True)
 
     @classmethod
-    def from_json(cls, s: str) -> "CandidatePrune":
+    def from_json(cls, s: str) -> "ProposedPrune":
         """Deserialize from a JSON string."""
         data = json.loads(s)
         return cls(
@@ -139,8 +138,8 @@ class CandidatePrune:
 # ---------------------------------------------------------------------------
 
 
-class _CandidateUpdateModel(pydantic.BaseModel):
-    """Pydantic mirror of :class:`CandidateUpdate`; rejects unknown fields."""
+class _ProposedUpdateModel(pydantic.BaseModel):
+    """Pydantic mirror of :class:`ProposedUpdate`; rejects unknown fields."""
 
     model_config = pydantic.ConfigDict(use_enum_values=False, extra="forbid")
 
@@ -160,8 +159,8 @@ class _CandidateUpdateModel(pydantic.BaseModel):
         return v
 
 
-class _CandidatePruneModel(pydantic.BaseModel):
-    """Pydantic mirror of :class:`CandidatePrune`; rejects unknown fields."""
+class _ProposedPruneModel(pydantic.BaseModel):
+    """Pydantic mirror of :class:`ProposedPrune`; rejects unknown fields."""
 
     model_config = pydantic.ConfigDict(use_enum_values=False, extra="forbid")
 
@@ -175,13 +174,13 @@ class _AgentResponseModel(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(extra="forbid")
 
-    updates: list[_CandidateUpdateModel]
-    prunes: list[_CandidatePruneModel]
+    updates: list[_ProposedUpdateModel]
+    prunes: list[_ProposedPruneModel]
 
 
 def parse_agent_response(
     payload: dict | str,
-) -> tuple[list[CandidateUpdate], list[CandidatePrune]]:
+) -> tuple[list[ProposedUpdate], list[ProposedPrune]]:
     """Validate a raw agent payload and convert to frozen dataclasses.
 
     Args:
@@ -198,7 +197,7 @@ def parse_agent_response(
         payload = json.loads(payload)
     model = _AgentResponseModel.model_validate(payload)
     updates = [
-        CandidateUpdate(
+        ProposedUpdate(
             record_type=u.record_type,
             classification=u.classification,
             body=u.body,
@@ -210,7 +209,7 @@ def parse_agent_response(
         for u in model.updates
     ]
     prunes = [
-        CandidatePrune(
+        ProposedPrune(
             entry_id=p.entry_id,
             trigger=p.trigger,
             rationale=p.rationale,

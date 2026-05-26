@@ -14,8 +14,8 @@ import pytest
 from pi_harness.corpus.format import Classification, CorpusEntry, RecordType
 from pi_harness.improve.agent import ImproveError
 from pi_harness.improve.candidates import (
-    CandidatePrune,
-    CandidateUpdate,
+    ProposedPrune,
+    ProposedUpdate,
     PruneTrigger,
     parse_agent_response,
 )
@@ -111,7 +111,7 @@ def _commit_count(repo_path: Path) -> int:
     return int(res.stdout.strip() or 0)
 
 
-def _make_fake_agent(updates: list[CandidateUpdate], prunes: list[CandidatePrune]) -> MagicMock:
+def _make_fake_agent(updates: list[ProposedUpdate], prunes: list[ProposedPrune]) -> MagicMock:
     """A MagicMock ImproveAgent whose analyze() returns the canned (updates, prunes)."""
     agent = MagicMock()
     agent.analyze.return_value = (updates, prunes)

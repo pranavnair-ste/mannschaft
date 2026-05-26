@@ -313,8 +313,8 @@ def test_analyze_returns_parsed_candidates() -> None:
     """A valid LLM response yields a (updates, prunes) tuple."""
     from pi_harness.improve.agent import ImproveAgent
     from pi_harness.improve.candidates import (
-        CandidatePrune,
-        CandidateUpdate,
+        ProposedPrune,
+        ProposedUpdate,
     )
 
     client = _make_fake_client([_VALID_JSON_PAYLOAD])
@@ -328,9 +328,9 @@ def test_analyze_returns_parsed_candidates() -> None:
     )
 
     assert len(updates) == 1
-    assert isinstance(updates[0], CandidateUpdate)
+    assert isinstance(updates[0], ProposedUpdate)
     assert len(prunes) == 1
-    assert isinstance(prunes[0], CandidatePrune)
+    assert isinstance(prunes[0], ProposedPrune)
     assert client.chat.completions.create.call_count == 1
 
 

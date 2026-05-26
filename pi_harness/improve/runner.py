@@ -28,8 +28,8 @@ from pi_harness.corpus.prune import PruneAction, PruneActionType
 from pi_harness.corpus.reader import CorpusReader
 from pi_harness.improve.agent import ImproveAgent, ImproveError
 from pi_harness.improve.candidates import (
-    CandidatePrune,
-    CandidateUpdate,
+    ProposedPrune,
+    ProposedUpdate,
     PruneTrigger,
 )
 from pi_harness.trajectory.store import query_events, query_runs
@@ -112,12 +112,12 @@ def _trigger_to_action(trigger: PruneTrigger) -> PruneAction:
 
 
 def _to_curator_updates(
-    updates: Sequence[CandidateUpdate],
+    updates: Sequence[ProposedUpdate],
     now: datetime,
 ) -> list[CuratorUpdate]:
     """Convert improve-agent candidates to Plan-3 curator-input updates.
 
-    Each :class:`CandidateUpdate` becomes a ``kind='new'`` curator update
+    Each :class:`ProposedUpdate` becomes a ``kind='new'`` curator update
     with a freshly-minted :class:`CorpusEntry` (id derived from
     ``record_type + body``, counters zeroed, timestamps = ``now``,
     ``last_referenced_run_id = source_run_id``).
@@ -141,7 +141,7 @@ def _to_curator_updates(
     return curator_updates
 
 
-def _to_curator_prunes(prunes: Sequence[CandidatePrune]) -> list[CuratorPrune]:
+def _to_curator_prunes(prunes: Sequence[ProposedPrune]) -> list[CuratorPrune]:
     """Convert improve-agent prunes to Plan-3 curator-input prunes."""
     curator_prunes: list[CuratorPrune] = []
     for p in prunes:

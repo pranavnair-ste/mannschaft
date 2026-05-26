@@ -322,7 +322,7 @@ class ImproveAgent:
     Reads the (already-summarized) inputs, calls the LLM with JSON mode,
     validates the response via :func:`parse_agent_response`, retries on
     malformed output up to :data:`MAX_RETRIES` times, and returns
-    ``(list[CandidateUpdate], list[CandidatePrune])``.
+    ``(list[ProposedUpdate], list[ProposedPrune])``.
 
     Use :meth:`analyze` as the single entry point. ``client`` is exposed
     only to make testing trivial — production callers pass ``None`` and we

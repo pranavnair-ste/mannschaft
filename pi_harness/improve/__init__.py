@@ -8,23 +8,23 @@ Public API (called by Plan 5's topology coordinator at run completion):
 
 LLM-emitted candidate types (subordinate API for Plan 5 + tests):
 
-- :class:`CandidateUpdate`, :class:`CandidatePrune`, :class:`PruneTrigger`
+- :class:`ProposedUpdate`, :class:`ProposedPrune`, :class:`PruneTrigger`
 - :func:`parse_agent_response` — pydantic validator for raw LLM output.
 - :class:`ImproveAgent` — exposed for unit-level injection only.
 """
 
 from pi_harness.improve.agent import ImproveAgent, ImproveError
 from pi_harness.improve.candidates import (
-    CandidatePrune,
-    CandidateUpdate,
+    ProposedPrune,
+    ProposedUpdate,
     PruneTrigger,
     parse_agent_response,
 )
 from pi_harness.improve.runner import ImproveReport, run_for_completed_run
 
 __all__ = [
-    "CandidatePrune",
-    "CandidateUpdate",
+    "ProposedPrune",
+    "ProposedUpdate",
     "ImproveAgent",
     "ImproveError",
     "ImproveReport",
