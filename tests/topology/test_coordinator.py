@@ -6,10 +6,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pi_harness.corpus.format import Classification
 from pi_harness.topology.base import (
     AgentSpec, ModelTier, Role, RunHandle, RunSpec, SyncMode, TopologyMode,
 )
-from pi_harness.topology.coordinator import Coordinator
+from pi_harness.topology.coordinator import Coordinator, DEFAULT_PRIME_TOKEN_BUDGET
 
 
 @pytest.fixture
@@ -200,3 +201,84 @@ class TestCoordinatorTemplateEmission:
         coord.launch(basic_spec)
         # SequentialTopology emits len(agents) tasks; basic_spec has 2 agents.
         assert coord._clawteam_client.create_task.call_count == 2
+
+
+class TestCoordinatorPrimeCall:
+    """Lock in the session-aware, typed prime() call introduced in Plan 3."""
+
+    def test_prime_called_with_token_budget_and_session(
+        self, coord, mock_corpus_reader
+    ):
+        """prime() must receive token_budget=DEFAULT_PRIME_TOKEN_BUDGET and the
+        session_id from the spec."""
+        spec = RunSpec(
+            goal="g",
+            agents=[
+                AgentSpec(name="a", role=Role.BUILDER, model_tier=ModelTier.FAST),
+                AgentSpec(name="b", role=Role.REVIEWER, model_tier=ModelTier.REASONING),
+            ],
+            mode=TopologyMode.SEQUENTIAL,
+            sync_mode=SyncMode.PER_AGENT,
+            corpus_classifications=["foundational"],
+            session_id="sess-test",
+        )
+        coord.launch(spec)
+        kwargs = mock_corpus_reader.prime.call_args.kwargs
+        assert kwargs["token_budget"] == DEFAULT_PRIME_TOKEN_BUDGET
+        assert kwargs["session_id"] == "sess-test"
+
+    def test_empty_classifications_pass_none(self, coord, mock_corpus_reader):
+        """An empty corpus_classifications list must be passed as None, not [],
+        so the reader returns all tiers rather than filtering everything out."""
+        spec = RunSpec(
+            goal="g",
+            agents=[
+                AgentSpec(name="a", role=Role.BUILDER, model_tier=ModelTier.FAST),
+                AgentSpec(name="b", role=Role.REVIEWER, model_tier=ModelTier.REASONING),
+            ],
+            mode=TopologyMode.SEQUENTIAL,
+            sync_mode=SyncMode.PER_AGENT,
+            corpus_classifications=[],
+        )
+        coord.launch(spec)
+        kwargs = mock_corpus_reader.prime.call_args.kwargs
+        assert kwargs["classifications"] is None
+
+    def test_classifications_converted_to_enums(self, coord, mock_corpus_reader):
+        """String tier names in corpus_classifications must be converted to
+        Classification enum instances before being passed to prime()."""
+        spec = RunSpec(
+            goal="g",
+            agents=[
+                AgentSpec(name="a", role=Role.BUILDER, model_tier=ModelTier.FAST),
+                AgentSpec(name="b", role=Role.REVIEWER, model_tier=ModelTier.REASONING),
+            ],
+            mode=TopologyMode.SEQUENTIAL,
+            sync_mode=SyncMode.PER_AGENT,
+            corpus_classifications=["foundational"],
+        )
+        coord.launch(spec)
+        kwargs = mock_corpus_reader.prime.call_args.kwargs
+        assert kwargs["classifications"] == [Classification.FOUNDATIONAL]
+
+    def test_run_handle_carries_session_id(self, coord):
+        """RunHandle returned by launch must carry the session_id from RunSpec."""
+        spec = RunSpec(
+            goal="g",
+            agents=[
+                AgentSpec(name="a", role=Role.BUILDER, model_tier=ModelTier.FAST),
+                AgentSpec(name="b", role=Role.REVIEWER, model_tier=ModelTier.REASONING),
+            ],
+            mode=TopologyMode.SEQUENTIAL,
+            sync_mode=SyncMode.PER_AGENT,
+            corpus_classifications=[],
+            session_id="sess-9",
+        )
+        handle = coord.launch(spec)
+        assert handle.session_id == "sess-9"
+
+    def test_run_handle_session_id_none_when_not_set(self, coord, basic_spec):
+        """When spec.session_id is None, handle.session_id must also be None."""
+        # basic_spec has no session_id set
+        handle = coord.launch(basic_spec)
+        assert handle.session_id is None

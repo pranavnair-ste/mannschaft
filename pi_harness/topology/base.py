@@ -68,11 +68,13 @@ class RunSpec:
 @dataclass
 class RunHandle:
     """Returned by Coordinator.launch. Threaded into trajectory capture +
-    post-completion improve scheduling."""
+    post-completion improve scheduling. session_id is propagated from RunSpec
+    so the improve adapter can stamp corpus entries with the originating session."""
     run_id: str
     team_name: str
     started_at: datetime
     topology: TopologyMode
+    session_id: str | None = None
 
 
 @dataclass

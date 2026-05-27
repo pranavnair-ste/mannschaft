@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 import tomli_w
 
+from pi_harness.corpus.format import Classification
 from pi_harness.clawteam import (
     ClawTeamClient,
     ClawTeamRunFailure,
@@ -30,6 +31,10 @@ from pi_harness.topology.parallel import ParallelTopology
 from pi_harness.topology.persistent import PersistentTopology
 from pi_harness.topology.sequential import SequentialTopology
 from pi_harness.topology.synthesis import SynthesisTopology
+
+# metadata-tier priming budget; topology owns this per Decision §5
+DEFAULT_PRIME_TOKEN_BUDGET = 4000
+
 
 def _get_topology_registry() -> dict[TopologyMode, type[Topology]]:
     """Return the topology registry, resolving class references at call time.
@@ -73,8 +78,14 @@ class Coordinator:
         topology = topology_cls()
 
         # 1. Pre-launch corpus prime (Plan 3).
+        classifications = (
+            [Classification(c) for c in spec.corpus_classifications]
+            if spec.corpus_classifications
+            else None
+        )
         self._corpus_reader.prime(
-            classifications=spec.corpus_classifications,
+            token_budget=DEFAULT_PRIME_TOKEN_BUDGET,
+            classifications=classifications,
             session_id=spec.session_id,
         )
 
@@ -117,6 +128,7 @@ class Coordinator:
             team_name=team_name,
             started_at=datetime.now(timezone.utc),
             topology=spec.mode,
+            session_id=spec.session_id,
         )
         self._task_specs[run_id] = tasks
         return handle

@@ -90,6 +90,30 @@ class TestRunHandle:
         assert handle.run_id == "run-001"
         assert handle.started_at == now
 
+    def test_run_handle_session_id_defaults_none(self):
+        """Constructing RunHandle with only the 4 original fields leaves
+        session_id as None."""
+        now = datetime(2026, 5, 25, 12, 0, 0)
+        handle = RunHandle(
+            run_id="run-002",
+            team_name="team-002",
+            started_at=now,
+            topology=TopologyMode.PARALLEL,
+        )
+        assert handle.session_id is None
+
+    def test_run_handle_session_id_set(self):
+        """Passing session_id stores it on the handle."""
+        now = datetime(2026, 5, 25, 12, 0, 0)
+        handle = RunHandle(
+            run_id="run-003",
+            team_name="team-003",
+            started_at=now,
+            topology=TopologyMode.SEQUENTIAL,
+            session_id="s1",
+        )
+        assert handle.session_id == "s1"
+
 
 class TestTaskDef:
     def test_blocked_by_defaults_empty(self):
