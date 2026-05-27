@@ -155,3 +155,47 @@ class TestBuildTemplateDictGuard:
         )
         with pytest.raises(ValueError, match="at least one agent"):
             SequentialTopology().build_template_dict(spec)
+
+
+class TestCompletionProtocolInjection:
+    def test_build_template_dict_appends_protocol_to_every_agent(self):
+        spec = RunSpec(
+            goal="ship it",
+            agents=[
+                AgentSpec(name="lead", role=Role.ORCHESTRATOR,
+                          model_tier=ModelTier.REASONING, task_prompt="lead the team"),
+                AgentSpec(name="bob", role=Role.BUILDER,
+                          model_tier=ModelTier.FAST, task_prompt="build the thing"),
+            ],
+            mode=TopologyMode.SEQUENTIAL,
+            sync_mode=SyncMode.PER_AGENT,
+            corpus_classifications=[],
+        )
+        dct = SequentialTopology().build_template_dict(spec)
+
+        leader = dct["template"]["leader"]
+        assert leader["task"].startswith("lead the team")
+        assert "clawteam task update" in leader["task"]
+        assert "--status completed" in leader["task"]
+        assert "'lead'" in leader["task"]  # interpolated own name
+
+        builder = dct["template"]["agents"][0]
+        assert builder["task"].startswith("build the thing")
+        assert "--status completed" in builder["task"]
+        assert "'bob'" in builder["task"]
+
+    def test_protocol_appended_to_default_prompt_too(self):
+        """Agents with no task_prompt still get the protocol after the default."""
+        spec = RunSpec(
+            goal="ship it",
+            agents=[
+                AgentSpec(name="solo", role=Role.BUILDER, model_tier=ModelTier.FAST),
+            ],
+            mode=TopologyMode.SEQUENTIAL,
+            sync_mode=SyncMode.PER_AGENT,
+            corpus_classifications=[],
+        )
+        dct = SequentialTopology().build_template_dict(spec)
+        leader = dct["template"]["leader"]
+        assert "--status completed" in leader["task"]
+        assert "'solo'" in leader["task"]
