@@ -26,5 +26,12 @@ dist/
 # Worktrees (kept from bootstrap commit; do not commit worktree trees)
 .worktrees/
 
+# Claude Code local state (agent worktrees live under .claude/worktrees/;
+# never commit these — a broad `git add` would stage them as gitlinks)
+.claude/
+
 # Harness state (must never land in repo)
 /.pi-harness-local/
+
+# Smoke-test scratch artifact (written into the repo root by the e2e team)
+smoke_out.txt

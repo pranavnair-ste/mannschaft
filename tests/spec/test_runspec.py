@@ -16,7 +16,7 @@ import pytest
 
 from pi_harness.spec.decomposer import DecomposedTask
 from pi_harness.spec.format import Spec
-from pi_harness.spec.runspec import spec_to_runspec
+from pi_harness.spec.runspec import build_coordinator, spec_to_runspec
 from pi_harness.topology.base import (
     AgentSpec,
     ModelTier,
@@ -153,3 +153,23 @@ def test_runspec_consumable_by_real_coordinator() -> None:
     assert parsed["template"]["leader"]["type"] == "orchestrator"
     worker_names = {a["name"] for a in parsed["template"]["agents"]}
     assert worker_names == {"t-cancel", "t-cleanup"}
+
+
+def test_build_coordinator_wires_real_components(tmp_path) -> None:
+    """build_coordinator must hand the Coordinator a real ClawTeamClient,
+    CorpusReader, and the improve runner module (whose run_for_completed_run
+    signature matches Coordinator.on_completion's call)."""
+    from pi_harness.clawteam import ClawTeamClient
+    from pi_harness.corpus.reader import CorpusReader
+    from pi_harness.improve import runner as improve_runner
+    from pi_harness.topology.coordinator import Coordinator
+
+    cfg = MagicMock()
+    cfg.corpus_root = tmp_path / "corpus"
+    coord = build_coordinator(cfg)
+
+    assert isinstance(coord, Coordinator)
+    assert isinstance(coord._clawteam_client, ClawTeamClient)
+    assert isinstance(coord._corpus_reader, CorpusReader)
+    assert coord._improve_runner is improve_runner
+    assert hasattr(coord._improve_runner, "run_for_completed_run")

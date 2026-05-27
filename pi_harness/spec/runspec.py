@@ -85,3 +85,26 @@ def spec_to_runspec(
         sync_profile=sync_profile if sync_profile is not None else spec.sync_profile,
         tasks=task_defs,
     )
+
+
+def build_coordinator(config):
+    """Wire a real Plan 5 Coordinator with the real Plan 3 corpus reader and the
+    Plan 4 improve runner module.
+
+    The CLI's ``pi-harness launch`` and the editor's ``/launch`` route share
+    this so a launched run primes the corpus and schedules improve identically.
+    The improve *module* itself is passed as ``improve_runner`` — its
+    module-level ``run_for_completed_run(run_id, config, *, session_id=...)``
+    matches what Coordinator.on_completion calls.
+    """
+    from pi_harness.clawteam import ClawTeamClient
+    from pi_harness.corpus.reader import CorpusReader
+    from pi_harness.improve import runner as improve_runner
+    from pi_harness.topology.coordinator import Coordinator
+
+    return Coordinator(
+        config=config,
+        clawteam_client=ClawTeamClient(config),
+        corpus_reader=CorpusReader(config.corpus_root),
+        improve_runner=improve_runner,
+    )
