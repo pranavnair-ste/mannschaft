@@ -28,8 +28,11 @@ def basic_spec():
 
 
 @pytest.fixture
-def coord(mock_clawteam_client, mock_corpus_reader, mock_improve_runner):
+def coord(mock_clawteam_client, mock_corpus_reader, mock_improve_runner, tmp_path):
     cfg = MagicMock()
+    cfg.trajectory_db_path = tmp_path / "trajectory.db"
+    cfg.reasoning_model = "gpt-5"
+    cfg.fast_model = "gpt-5-mini"
     return Coordinator(
         config=cfg,
         clawteam_client=mock_clawteam_client,
@@ -457,3 +460,35 @@ class TestCoordinatorExplicitTasks:
         which would fall back to topology.plan)."""
         coord.launch(self._spec(tasks=[]))
         assert coord._clawteam_client.create_task.call_count == 0
+
+
+class TestCoordinatorTrajectoryCapture:
+    def test_launch_initializes_trajectory_db(self, coord, basic_spec):
+        coord.launch(basic_spec)
+        assert coord._config.trajectory_db_path.exists()
+
+    def test_wait_for_completion_captures_task_transitions(self, coord, basic_spec):
+        from pi_harness.trajectory.store import query_events
+
+        handle = coord.launch(basic_spec)
+        client = coord._clawteam_client
+
+        def fake_wait(team_name, timeout, poll_interval=5.0, on_poll=None):
+            on_poll([{"task_id": "t1", "owner": "a", "status": "pending"}])
+            on_poll([{"task_id": "t1", "owner": "a", "status": "completed"}])
+            return True
+
+        client.wait_for_completion.side_effect = fake_wait
+        client.list_tasks.return_value = [{"id": "t1", "status": "completed"}]
+
+        result = coord.wait_for_completion(handle, timeout=60)
+        assert result.success is True
+
+        events = query_events(
+            run_id=handle.run_id, db_path=coord._config.trajectory_db_path
+        )
+        statuses = [
+            e.output["status"] for e in events if e.classification == "task_transition"
+        ]
+        assert "pending" in statuses
+        assert "completed" in statuses

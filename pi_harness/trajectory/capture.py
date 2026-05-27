@@ -154,6 +154,51 @@ async def capture_pi_agent_stream(
     return written
 
 
+def diff_task_states(
+    prev_state: dict[str, str],
+    tasks: list[Mapping[str, Any]],
+    *,
+    run_id: str,
+    now: datetime,
+) -> list[TrajectoryEvent]:
+    """Return a task_transition event for each task whose status changed since
+    the last poll (a never-seen task counts as a change, prev_status=None).
+
+    ``prev_state`` (task_id -> status) is updated in place. Shared by
+    ``capture_clawteam_transitions`` (async) and the Coordinator's sync wait
+    callback so both agree on what counts as a transition.
+    """
+    events: list[TrajectoryEvent] = []
+    for task in tasks:
+        # Real ClawTeam 0.2.x JSON uses `task_id`/`status`/`owner` field names.
+        task_id = str(task.get("task_id") or task.get("id") or "")
+        if not task_id:
+            continue
+        status = str(task.get("status") or task.get("state") or "")
+        prev = prev_state.get(task_id)
+        if prev == status:
+            continue
+        events.append(
+            TrajectoryEvent(
+                run_id=run_id,
+                agent_id=str(task.get("owner") or task.get("agent") or "") or "_team",
+                step_id=f"clawteam-{task_id}-{status}",
+                ts=now,
+                model="",
+                tool="",
+                input={"task_id": task_id, "prev_status": prev},
+                output={"task_id": task_id, "status": status, "raw": task},
+                duration_ms=0,
+                tokens_in=0,
+                tokens_out=0,
+                outcome="success",
+                classification="task_transition",
+            )
+        )
+        prev_state[task_id] = status
+    return events
+
+
 async def capture_clawteam_transitions(
     *,
     run_id: str,
@@ -161,18 +206,14 @@ async def capture_clawteam_transitions(
     db_path: Path | str | None = None,
     poll_interval_s: float = 2.0,
 ) -> None:
-    """Poll `clawteam task list --json` every `poll_interval_s` seconds.
-
-    Emits a "task_transition" event whenever a task's `state` field changes
-    relative to the previous poll. The very first poll seeds the state cache
-    and emits a transition event per task with prev_state=None so downstream
-    consumers always see the run's starting fan-out.
+    """Poll `clawteam task list --json` every `poll_interval_s` seconds and write
+    a "task_transition" event whenever a task's status changes (the first poll
+    emits one per task with prev_status=None, seeding the run's fan-out).
 
     Runs until cancelled. Errors from `_clawteam_list_tasks` (subprocess
     failures, JSON parse errors) are logged and the loop retries.
     """
     last_state: dict[str, str] = {}
-    first_poll = True
 
     while True:
         try:
@@ -185,39 +226,9 @@ async def capture_clawteam_transitions(
             continue
 
         now = datetime.now(timezone.utc)
-        for idx, task in enumerate(tasks):
-            # Real ClawTeam 0.2.x JSON uses `task_id`/`status`/`owner` field names.
-            task_id = str(task.get("task_id") or task.get("id") or "")
-            if not task_id:
-                continue
-            status = str(task.get("status") or task.get("state") or "")
-            prev = last_state.get(task_id)
-            if first_poll or prev != status:
-                ev = TrajectoryEvent(
-                    run_id=run_id,
-                    agent_id=str(task.get("owner") or task.get("agent") or "") or "_team",
-                    step_id=f"clawteam-{task_id}-{status}",
-                    ts=now,
-                    model="",
-                    tool="",
-                    input={"task_id": task_id, "prev_status": prev},
-                    output={
-                        "task_id": task_id,
-                        "status": status,
-                        "raw": task,
-                    },
-                    duration_ms=0,
-                    tokens_in=0,
-                    tokens_out=0,
-                    outcome="success",
-                    classification="task_transition",
-                )
-                try:
-                    await awrite_event(ev, db_path=db_path)
-                except Exception as exc:  # noqa: BLE001
-                    log.exception(
-                        "capture: failed writing task_transition: %s", exc
-                    )
-                last_state[task_id] = status
-        first_poll = False
+        for ev in diff_task_states(last_state, tasks, run_id=run_id, now=now):
+            try:
+                await awrite_event(ev, db_path=db_path)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("capture: failed writing task_transition: %s", exc)
         await asyncio.sleep(poll_interval_s)

@@ -151,6 +151,30 @@ def test_kill_tmux_session_targets_clawteam_session(cfg):
     assert mock_run.call_args.kwargs.get("check") is False
 
 
+def test_wait_for_completion_invokes_on_poll_each_poll(cfg, monkeypatch):
+    """on_poll receives the freshly-listed tasks on every poll iteration."""
+    from pi_harness.clawteam.client import ClawTeamClient
+
+    client = ClawTeamClient(cfg)
+    polls = [
+        [{"id": "t1", "status": "in_progress"}],
+        [{"id": "t1", "status": "completed"}],
+    ]
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        client, "list_tasks", lambda team: polls[min(len(seen), len(polls) - 1)]
+    )
+    result = client.wait_for_completion(
+        "team-1",
+        timeout=5.0,
+        poll_interval=0.0,
+        on_poll=lambda tasks: seen.append([t["status"] for t in tasks]),
+    )
+    assert result is True
+    assert ["in_progress"] in seen
+    assert ["completed"] in seen
+
+
 def test_install_template_writes_file_under_user_templates_dir(cfg, tmp_path, monkeypatch):
     """install_template writes to the global user-templates dir without shelling out.
 
