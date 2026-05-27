@@ -119,3 +119,24 @@ def test_serialize_creates_parent_dir(tmp_path: Path, monkeypatch: pytest.Monkey
     # `specs/` directory does not exist yet — serialize must create it.
     serialize_spec(spec, spec_path(spec.id))
     assert (tmp_path / "specs" / "spec-002.md").exists()
+
+
+def test_public_exports() -> None:
+    from pi_harness.spec import (
+        DecomposedTask,
+        Decomposer,
+        LintResult,
+        LintViolation,
+        Linter,
+        Spec,
+        build_coordinator,
+        spec_to_runspec,
+    )
+
+    assert all(
+        x is not None
+        for x in (
+            DecomposedTask, Decomposer, LintResult, LintViolation, Linter, Spec,
+            build_coordinator, spec_to_runspec,
+        )
+    )
