@@ -193,13 +193,25 @@ class Coordinator:
         return result
 
     def on_completion(self, handle: RunHandle) -> None:
-        """Called after wait_for_completion. Triggers Plan 4's improve run
-        iff the run succeeded."""
+        """Called after wait_for_completion. On a clean success: trigger Plan 4's
+        improve run, then tear down the team. Failed/timed-out runs are left up
+        for debugging."""
         result = self._last_result.get(handle.run_id)
         if result is not None and result.success:
             self._improve_runner.run_for_completed_run(
                 handle.run_id, self._config, session_id=handle.session_id
             )
+            self.teardown(handle)
+
+    def teardown(self, handle: RunHandle) -> None:
+        """Stop the run's agents and delete its team data.
+
+        Kills the tmux session first (so agents stop immediately and stop
+        burning credit), then removes the team record. Safe to call repeatedly.
+        Callable directly; also invoked by on_completion on a clean success.
+        """
+        self._clawteam_client.kill_tmux_session(handle.team_name)
+        self._clawteam_client.cleanup_team(handle.team_name)
 
     def _apply_sync_mode(self, template_dict: dict, spec: RunSpec) -> None:
         """In SYNC_ALL mode, force every agent (leader + workers) onto a
