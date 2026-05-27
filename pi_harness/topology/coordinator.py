@@ -165,10 +165,12 @@ class Coordinator:
             success = False
 
         # Snapshot terminal statuses for telemetry (best-effort).
+        # ClawTeam's `task list --json` keys the task id as "id" (not
+        # "task_id"); fall back to "task_id" only for non-ClawTeam stubs.
         try:
             board = self._clawteam_client.list_tasks(handle.team_name)
             terminal_statuses = {
-                str(t.get("task_id", "")): str(t.get("status", ""))
+                str(t.get("id", t.get("task_id", ""))): str(t.get("status", ""))
                 for t in board
             }
         except Exception:
