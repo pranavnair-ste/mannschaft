@@ -124,10 +124,13 @@ def test_smoke_coordinator_sequential(real_cfg):
     corpus_reader = CorpusReader(real_cfg.corpus_root)
 
     # Wrap run_for_completed_run in a thin object so Coordinator can call
-    # .run_for_completed_run(handle).
+    # .run_for_completed_run(handle). Forward the handle's session_id so any
+    # corpus entries the improve agent writes are stamped with this session.
     class _ImproveRunner:
         def run_for_completed_run(self, handle):
-            return run_for_completed_run(handle.run_id, real_cfg)
+            return run_for_completed_run(
+                handle.run_id, real_cfg, session_id=handle.session_id
+            )
 
     improve_runner = _ImproveRunner()
 
@@ -201,8 +204,10 @@ def test_smoke_coordinator_sequential(real_cfg):
                 f"template file not found at {template_file[0]}"
             )
             import tomllib
-            template_file[0].read_bytes()  # parse check — tomllib.loads(text) verifies TOML
-            tomllib.loads(template_file[0].read_text())
+            parsed_template = tomllib.loads(template_file[0].read_text())
+            assert "template" in parsed_template, (
+                f"registered template missing [template] table: {parsed_template}"
+            )
 
             # create_task must have been called once per TaskDef from the topology.
             # SequentialTopology with 2 agents produces 2 tasks (each agent gets one).
