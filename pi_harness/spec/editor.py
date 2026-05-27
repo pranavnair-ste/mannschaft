@@ -14,7 +14,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
 from pi_harness.spec.decomposer import DecomposedTask
@@ -28,7 +28,10 @@ from pi_harness.spec.format import (
 from pi_harness.spec.linter import Linter, LintResult
 from pi_harness.spec.runspec import build_coordinator, spec_to_runspec
 
-app = FastAPI(title="Pi-Harness Spec Editor", version="0.1.0")
+# Routes live on a router so both this module's standalone ``app`` and the
+# Symphony dashboard app (pi_harness.api.server) can mount the same /specs
+# surface without duplicating handlers.
+router = APIRouter()
 
 
 # ---------- request / response models ----------
@@ -115,7 +118,7 @@ def get_coordinator():
 # ---------- CRUD routes ----------
 
 
-@app.get("/specs", response_model=SpecList)
+@router.get("/specs", response_model=SpecList)
 def list_specs() -> SpecList:
     storage = spec_storage_dir()
     if not storage.exists():
@@ -129,12 +132,12 @@ def list_specs() -> SpecList:
     return SpecList(specs=specs)
 
 
-@app.get("/specs/{spec_id}", response_model=Spec)
+@router.get("/specs/{spec_id}", response_model=Spec)
 def get_spec(spec_id: str) -> Spec:
     return _load(spec_id)
 
 
-@app.post("/specs", response_model=Spec, status_code=status.HTTP_201_CREATED)
+@router.post("/specs", response_model=Spec, status_code=status.HTTP_201_CREATED)
 def create_spec(body: CreateSpecBody) -> Spec:
     now = _now()
     spec = Spec(
@@ -153,7 +156,7 @@ def create_spec(body: CreateSpecBody) -> Spec:
     return spec
 
 
-@app.put("/specs/{spec_id}", response_model=Spec)
+@router.put("/specs/{spec_id}", response_model=Spec)
 def update_spec(spec_id: str, body: UpdateSpecBody) -> Spec:
     spec = _load(spec_id)
     data = spec.__dict__.copy()
@@ -167,7 +170,7 @@ def update_spec(spec_id: str, body: UpdateSpecBody) -> Spec:
 # ---------- linter + decomposer routes ----------
 
 
-@app.post("/specs/{spec_id}/lint", response_model=LintResult)
+@router.post("/specs/{spec_id}/lint", response_model=LintResult)
 def lint_spec(spec_id: str) -> LintResult:
     spec = _load(spec_id)
     result = Linter().lint(spec)
@@ -180,7 +183,7 @@ def lint_spec(spec_id: str) -> LintResult:
     return result
 
 
-@app.post("/specs/{spec_id}/decompose", response_model=DecomposeResponse)
+@router.post("/specs/{spec_id}/decompose", response_model=DecomposeResponse)
 def decompose_spec(spec_id: str, decomposer=Depends(get_decomposer)) -> DecomposeResponse:
     spec = _load(spec_id)
     if spec.linter_score is None or spec.linter_score < 1.0:
@@ -203,7 +206,7 @@ def decompose_spec(spec_id: str, decomposer=Depends(get_decomposer)) -> Decompos
     return DecomposeResponse(tasks=tasks)
 
 
-@app.post("/specs/{spec_id}/launch", response_model=LaunchResponse)
+@router.post("/specs/{spec_id}/launch", response_model=LaunchResponse)
 def launch_spec(
     spec_id: str,
     decomposer=Depends(get_decomposer),
@@ -228,6 +231,10 @@ def launch_spec(
     data["updated_at"] = _now()
     serialize_spec(Spec(**data), spec_path(spec_id))
     return LaunchResponse(run_id=handle.run_id)
+
+
+app = FastAPI(title="Pi-Harness Spec Editor", version="0.1.0")
+app.include_router(router)
 
 
 def main() -> None:  # pragma: no cover
