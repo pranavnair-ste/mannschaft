@@ -45,7 +45,7 @@ testpaths = ["tests"]
 markers = [
   "smoke: integration test that launches a real ClawTeam team (requires OPENAI_API_KEY and a coding-agent CLI).",
 ]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers -m 'not smoke'"
 asyncio_mode = "auto"
 
 [dependency-groups]
