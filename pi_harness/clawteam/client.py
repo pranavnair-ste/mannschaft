@@ -132,6 +132,24 @@ class ClawTeamClient:
         """
         return self._run(["team", "cleanup", team_name, "--force"])
 
+    def kill_tmux_session(self, team_name: str) -> subprocess.CompletedProcess:
+        """Kill the tmux session ClawTeam created for ``team_name``.
+
+        ClawTeam's tmux backend names each team's session ``clawteam-{team}``
+        (clawteam/spawn/tmux_backend.py). ``team cleanup`` deletes team data but
+        does NOT kill this session, so agents keep running (and burning credit).
+        This is a direct ``tmux`` call — a sibling exception to install_template's
+        non-clawteam behaviour — so teardown can actually stop agents. A missing
+        session is treated as success (already gone).
+        """
+        session = f"clawteam-{team_name}"
+        return subprocess.run(
+            ["tmux", "kill-session", "-t", session],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
     def create_task(
         self,
         team_name: str,

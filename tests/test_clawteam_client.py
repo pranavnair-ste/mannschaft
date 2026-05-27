@@ -137,6 +137,20 @@ def test_register_profile_invokes_profile_set(cfg):
     assert "--api-key-env" in cmd and "OPENAI_API_KEY" in cmd
 
 
+def test_kill_tmux_session_targets_clawteam_session(cfg):
+    """kill_tmux_session must `tmux kill-session` the `clawteam-{team}` session
+    ClawTeam's tmux backend creates, and not raise when it is already gone."""
+    from pi_harness.clawteam.client import ClawTeamClient
+
+    client = ClawTeamClient(cfg)
+    with patch("pi_harness.clawteam.client.subprocess.run") as mock_run:
+        mock_run.return_value = _completed()
+        client.kill_tmux_session("team-abc123")
+
+    assert mock_run.call_args.args[0] == ["tmux", "kill-session", "-t", "clawteam-team-abc123"]
+    assert mock_run.call_args.kwargs.get("check") is False
+
+
 def test_install_template_writes_file_under_user_templates_dir(cfg, tmp_path, monkeypatch):
     """install_template writes to the global user-templates dir without shelling out.
 

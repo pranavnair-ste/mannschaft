@@ -207,6 +207,39 @@ class TestCoordinatorWaitAndImprove:
         assert coord._improve_runner.run_for_completed_run.call_count == 0
 
 
+class TestCoordinatorTeardown:
+    def test_teardown_kills_session_then_cleans_up(self, coord, basic_spec):
+        handle = coord.launch(basic_spec)
+        client = coord._clawteam_client
+        coord.teardown(handle)
+        client.kill_tmux_session.assert_called_once_with(handle.team_name)
+        client.cleanup_team.assert_called_once_with(handle.team_name)
+        names = [c[0] for c in client.mock_calls]
+        assert names.index("kill_tmux_session") < names.index("cleanup_team")
+
+    def test_on_completion_tears_down_on_success(self, coord, basic_spec):
+        handle = coord.launch(basic_spec)
+        client = coord._clawteam_client
+        client.wait_for_completion.return_value = True
+        client.list_tasks.return_value = []
+        coord.wait_for_completion(handle, timeout=60)
+        coord.on_completion(handle)
+        client.kill_tmux_session.assert_called_once_with(handle.team_name)
+        client.cleanup_team.assert_called_once_with(handle.team_name)
+
+    def test_on_completion_no_teardown_on_failure(self, coord, basic_spec):
+        from pi_harness.clawteam import ClawTeamTimeout
+
+        handle = coord.launch(basic_spec)
+        client = coord._clawteam_client
+        client.wait_for_completion.side_effect = ClawTeamTimeout("nope")
+        client.list_tasks.return_value = []
+        coord.wait_for_completion(handle, timeout=60)
+        coord.on_completion(handle)
+        client.kill_tmux_session.assert_not_called()
+        client.cleanup_team.assert_not_called()
+
+
 class TestCoordinatorTemplateEmission:
     def test_installs_template_before_launch(self, coord, basic_spec):
         """Coordinator must register the template via install_template before
