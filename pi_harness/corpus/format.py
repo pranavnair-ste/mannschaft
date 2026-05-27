@@ -124,6 +124,7 @@ class CorpusEntry:
     created_at: datetime
     last_updated_at: datetime
     last_referenced_run_id: Optional[str]
+    session_id: Optional[str]
     size_tokens: int
 
     @classmethod
@@ -134,6 +135,7 @@ class CorpusEntry:
         classification: Classification,
         body: str,
         now: datetime,
+        session_id: Optional[str] = None,
     ) -> "CorpusEntry":
         """Construct a fresh entry with derived id + size_tokens + timestamps."""
         return cls(
@@ -147,6 +149,7 @@ class CorpusEntry:
             created_at=now,
             last_updated_at=now,
             last_referenced_run_id=None,
+            session_id=session_id,
             size_tokens=count_tokens(body),
         )
 
@@ -192,6 +195,7 @@ def serialize_entry(entry: CorpusEntry) -> str:
         "created_at": _iso(entry.created_at),
         "last_updated_at": _iso(entry.last_updated_at),
         "last_referenced_run_id": entry.last_referenced_run_id,
+        "session_id": entry.session_id,
         "size_tokens": entry.size_tokens,
     }
     yaml_block = yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True)
@@ -243,6 +247,11 @@ def parse_entry(path: Path) -> CorpusEntry:
             None
             if data.get("last_referenced_run_id") in (None, "")
             else str(data["last_referenced_run_id"])
+        ),
+        session_id=(
+            None
+            if data.get("session_id") in (None, "")
+            else str(data["session_id"])
         ),
         size_tokens=int(data["size_tokens"]),
     )

@@ -217,6 +217,135 @@ def _head_sha(repo_path: Path) -> str:
     return res.stdout.strip()
 
 
+def test_to_curator_updates_stamps_session_id(tmp_path: Path) -> None:
+    """_to_curator_updates passes session_id into CorpusEntry.new."""
+    from pi_harness.improve.runner import _to_curator_updates
+
+    now = datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+    proposed = ProposedUpdate(
+        record_type=RecordType.PATTERN,
+        classification=Classification.TACTICAL,
+        body="some body text",
+        source_run_id="run-xyz",
+        source_step_ids=["step-001"],
+        confidence=0.9,
+        rationale="test rationale",
+    )
+
+    # With a session_id supplied
+    updates = _to_curator_updates([proposed], now, session_id="sess-7")
+    assert len(updates) == 1
+    assert updates[0].entry.session_id == "sess-7"
+    # last_referenced_run_id must still be set from source_run_id
+    assert updates[0].entry.last_referenced_run_id == "run-xyz"
+
+
+def test_to_curator_updates_default_session_id_is_none(tmp_path: Path) -> None:
+    """_to_curator_updates defaults session_id=None when not supplied."""
+    from pi_harness.improve.runner import _to_curator_updates
+
+    now = datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+    proposed = ProposedUpdate(
+        record_type=RecordType.PATTERN,
+        classification=Classification.TACTICAL,
+        body="another body",
+        source_run_id="run-abc",
+        source_step_ids=["step-001"],
+        confidence=0.8,
+        rationale="reason",
+    )
+
+    updates = _to_curator_updates([proposed], now)
+    assert len(updates) == 1
+    assert updates[0].entry.session_id is None
+
+
+def test_run_for_completed_run_session_id_stamped_on_entries(
+    tmp_path: Path,
+    sample_agent_response: str,
+) -> None:
+    """session_id passed to run_for_completed_run is stamped on new corpus entries."""
+    from pi_harness.corpus.curator import CandidateUpdate, Curator
+    from pi_harness.improve.runner import run_for_completed_run
+
+    config = _make_config(tmp_path)
+    now = datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+    curator = Curator(config)
+    _seed_corpus_entry(curator, now)
+    _seed_events(config.trajectory_db_path, "run-sess", now, n=4)
+
+    updates, prunes = parse_agent_response(sample_agent_response)
+    fake_agent = _make_fake_agent(updates, prunes)
+
+    # Intercept apply_candidates to capture the CuratorUpdates passed to it
+    captured_updates: list[CandidateUpdate] = []
+    original_apply = curator.apply_candidates
+
+    def capturing_apply(run_id, updates_in, prunes_in, **kwargs):
+        captured_updates.extend(updates_in)
+        return original_apply(run_id, updates_in, prunes_in, **kwargs)
+
+    curator.apply_candidates = capturing_apply  # type: ignore[method-assign]
+
+    run_for_completed_run(
+        "run-sess",
+        config=config,
+        agent=fake_agent,
+        curator=curator,
+        session_id="sess-7",
+    )
+
+    # All new entries must carry the session_id
+    new_updates = [u for u in captured_updates if u.kind == "new"]
+    assert new_updates, "Expected at least one new CuratorUpdate"
+    for u in new_updates:
+        assert u.entry.session_id == "sess-7", (
+            f"entry {u.entry.id} has session_id={u.entry.session_id!r}, expected 'sess-7'"
+        )
+
+
+def test_run_for_completed_run_session_id_default_none(
+    tmp_path: Path,
+    sample_agent_response: str,
+) -> None:
+    """Callers that don't pass session_id get None — no regression."""
+    from pi_harness.corpus.curator import CandidateUpdate, Curator
+    from pi_harness.improve.runner import run_for_completed_run
+
+    config = _make_config(tmp_path)
+    now = datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+    curator = Curator(config)
+    _seed_corpus_entry(curator, now)
+    _seed_events(config.trajectory_db_path, "run-nosess", now, n=4)
+
+    updates, prunes = parse_agent_response(sample_agent_response)
+    fake_agent = _make_fake_agent(updates, prunes)
+
+    captured_updates: list[CandidateUpdate] = []
+    original_apply = curator.apply_candidates
+
+    def capturing_apply(run_id, updates_in, prunes_in, **kwargs):
+        captured_updates.extend(updates_in)
+        return original_apply(run_id, updates_in, prunes_in, **kwargs)
+
+    curator.apply_candidates = capturing_apply  # type: ignore[method-assign]
+
+    # No session_id argument — existing callers must work unchanged
+    run_for_completed_run(
+        "run-nosess",
+        config=config,
+        agent=fake_agent,
+        curator=curator,
+    )
+
+    new_updates = [u for u in captured_updates if u.kind == "new"]
+    assert new_updates, "Expected at least one new CuratorUpdate"
+    for u in new_updates:
+        assert u.entry.session_id is None, (
+            f"entry {u.entry.id} should have session_id=None, got {u.entry.session_id!r}"
+        )
+
+
 def test_no_writes_during_run(
     tmp_path: Path,
     sample_agent_response: str,

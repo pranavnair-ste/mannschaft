@@ -118,6 +118,7 @@ class CorpusReader:
         token_budget: int,
         classifications: Optional[List[Classification]] = None,
         now: Optional[datetime] = None,
+        session_id: Optional[str] = None,
     ) -> List[CorpusEntry]:
         """Return metadata-tier entries ordered for agent priming.
 
@@ -131,9 +132,19 @@ class CorpusReader:
             classifications: If provided, only entries in these tiers are
                 considered.
             now: Reference timestamp for recency sorting; defaults to UTC now.
+            session_id: Session filter.
+                - ``None`` (default) — no filtering; all entries are returned
+                  regardless of their ``session_id`` (backward-compatible).
+                - A string value ``"X"`` — returns only entries where
+                  ``entry.session_id == "X"`` (session-specific knowledge)
+                  OR ``entry.session_id is None`` (global/cross-session
+                  knowledge).  Entries belonging to a *different* session are
+                  excluded.
         """
         now = now or datetime.now(timezone.utc)
         entries = _load_active_entries(self.root)
+        if session_id is not None:
+            entries = [e for e in entries if e.session_id in (session_id, None)]
         if classifications is not None:
             wanted = set(classifications)
             entries = [e for e in entries if e.classification in wanted]
@@ -245,7 +256,17 @@ def prime(
     classifications: Optional[List[Classification]] = None,
     now: Optional[datetime] = None,
     query_events: Optional[Callable[..., List[object]]] = None,
+    session_id: Optional[str] = None,
 ) -> List[CorpusEntry]:
-    """Module-level convenience: build a :class:`CorpusReader` and call ``prime``."""
+    """Module-level convenience: build a :class:`CorpusReader` and call ``prime``.
+
+    All parameters are forwarded to :meth:`CorpusReader.prime`.  See that
+    method's docstring for full semantics, including the ``session_id`` filter.
+    """
     reader = CorpusReader(root, query_events=query_events)
-    return reader.prime(token_budget=token_budget, classifications=classifications, now=now)
+    return reader.prime(
+        token_budget=token_budget,
+        classifications=classifications,
+        now=now,
+        session_id=session_id,
+    )

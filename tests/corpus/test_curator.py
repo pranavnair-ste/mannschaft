@@ -494,3 +494,68 @@ def test_hard_delete_requires_90_day_archive(tmp_corpus_root: Path) -> None:
         assert not archive_path_91.exists(), (
             "91-day archived entry should have been deleted"
         )
+
+
+# ---------------------------------------------------------------------------
+# Append update preserves existing entry's session_id
+# ---------------------------------------------------------------------------
+
+
+def test_append_update_preserves_session_id(tmp_corpus_root: Path) -> None:
+    """Appending body to an existing entry must not clobber its session_id."""
+    from pi_harness.corpus.curator import CandidateUpdate, Curator
+    from pi_harness.corpus.format import Classification, CorpusEntry, RecordType
+
+    cfg = _make_config(tmp_corpus_root)
+    curator = Curator(cfg)
+
+    now = datetime(2026, 5, 25, tzinfo=timezone.utc)
+
+    # Seed an entry that already carries a session_id
+    original = CorpusEntry.new(
+        record_type=RecordType.PATTERN,
+        classification=Classification.OBSERVATIONAL,
+        body="original body text",
+        now=now,
+        session_id="orig-session",
+    )
+
+    with freeze_time("2026-05-25T00:00:00Z"):
+        curator.apply_candidates(
+            run_id="run-seed",
+            updates=[CandidateUpdate(entry=original, kind="new", reason="seed")],
+            prunes=[],
+            now=now,
+        )
+
+    # Now append to that entry via a CandidateUpdate with kind="append"
+    # The entry in the update only needs the id (same body-hash) and the new body fragment
+    append_entry = CorpusEntry.new(
+        record_type=RecordType.PATTERN,
+        classification=Classification.OBSERVATIONAL,
+        body="original body text",  # same body → same id
+        now=now,
+        session_id=None,  # deliberately None on the update — existing entry's session_id should survive
+    )
+    # Override body on the append_entry to carry the appended text
+    from dataclasses import replace as dc_replace
+    append_entry = dc_replace(append_entry, body="appended fragment")
+
+    later = datetime(2026, 5, 26, tzinfo=timezone.utc)
+    with freeze_time("2026-05-26T00:00:00Z"):
+        curator.apply_candidates(
+            run_id="run-append",
+            updates=[CandidateUpdate(entry=append_entry, kind="append", reason="append test")],
+            prunes=[],
+            now=later,
+        )
+
+    # Re-read the entry from disk and check session_id was preserved
+    from pi_harness.corpus.format import parse_entry
+    entry_path = tmp_corpus_root / "observational" / f"{original.id}.md"
+    assert entry_path.exists(), f"Entry not found at {entry_path}"
+    on_disk = parse_entry(entry_path)
+    assert on_disk.session_id == "orig-session", (
+        f"Append clobbered session_id: got {on_disk.session_id!r}, expected 'orig-session'"
+    )
+    assert "appended fragment" in on_disk.body, "Appended text should be in the body"
