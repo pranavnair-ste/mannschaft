@@ -90,6 +90,67 @@ def test_get_unknown_returns_none(db: Path):
     assert get_run("nope", db_path=db) is None
 
 
+def test_query_run_summaries_joins_events_and_cost(db: Path):
+    from pi_harness.trajectory.runs import query_run_summaries
+    from pi_harness.trajectory.schema import TrajectoryEvent
+    from pi_harness.trajectory.store import write_event
+
+    register_run(
+        run_id="run-1", spec_id="s", topology="sequential", sync_mode="per_agent",
+        session_id=None, goal="g", team_name="t",
+        started_at=datetime(2026, 5, 28, tzinfo=timezone.utc), run_spec_json="{}", db_path=db,
+    )
+    for i, agent in enumerate(["a", "b"]):
+        write_event(
+            TrajectoryEvent(
+                run_id="run-1", agent_id=agent, step_id=f"s-{i}",
+                ts=datetime(2026, 5, 28, 0, i, tzinfo=timezone.utc), model="gpt-5-mini",
+                tool="edit", input={}, output={}, duration_ms=1, tokens_in=1_000_000,
+                tokens_out=0, outcome="success", classification="tool_call",
+            ),
+            db_path=db,
+        )
+    summaries = query_run_summaries(db_path=db)
+    assert len(summaries) == 1
+    s = summaries[0]
+    assert s.run_id == "run-1"
+    assert s.agent_count == 2
+    assert s.event_count == 2
+    assert s.total_tokens_in == 2_000_000
+    assert s.total_cost_usd == pytest.approx(0.5)  # 2M in * 0.25/1M
+
+
+def test_query_run_summaries_no_events_is_zero(db: Path):
+    from pi_harness.trajectory.runs import query_run_summaries
+
+    register_run(
+        run_id="empty", spec_id=None, topology="x", sync_mode="per_agent", session_id=None,
+        goal="g", team_name="t", started_at=datetime(2026, 5, 28, tzinfo=timezone.utc),
+        run_spec_json="{}", db_path=db,
+    )
+    s = query_run_summaries(db_path=db)[0]
+    assert s.agent_count == 0
+    assert s.event_count == 0
+    assert s.total_cost_usd == 0.0
+
+
+def test_query_run_summaries_status_filter(db: Path):
+    from pi_harness.trajectory.runs import query_run_summaries
+
+    register_run(
+        run_id="r-run", spec_id=None, topology="x", sync_mode="per_agent", session_id=None,
+        goal="g", team_name="t", started_at=datetime(2026, 5, 28, tzinfo=timezone.utc),
+        run_spec_json="{}", status="running", db_path=db,
+    )
+    register_run(
+        run_id="r-done", spec_id=None, topology="x", sync_mode="per_agent", session_id=None,
+        goal="g", team_name="t", started_at=datetime(2026, 5, 28, tzinfo=timezone.utc),
+        run_spec_json="{}", status="succeeded", db_path=db,
+    )
+    running = query_run_summaries(status="running", db_path=db)
+    assert {s.run_id for s in running} == {"r-run"}
+
+
 def test_run_summary_is_dataclass():
     # sanity: RunSummary constructs with the documented fields
     s = RunSummary(

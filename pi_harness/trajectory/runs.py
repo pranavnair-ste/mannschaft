@@ -150,3 +150,65 @@ def get_run(run_id: str, *, db_path: Path | str | None = None) -> dict[str, Any]
             "SELECT * FROM runs WHERE run_id = ?", (run_id,)
         ).fetchone()
     return _row_to_dict(row) if row else None
+
+
+def query_run_summaries(
+    *,
+    status: str | None = None,
+    limit: int | None = None,
+    db_path: Path | str | None = None,
+) -> list[RunSummary]:
+    """Join registry rows with aggregated event stats; derive cost per run."""
+    path = _resolve_db_path(db_path)
+    clauses: list[str] = []
+    params: list[Any] = []
+    if status is not None:
+        clauses.append("status = ?")
+        params.append(status)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    limit_clause = f"LIMIT {int(limit)}" if limit is not None else ""
+    out: list[RunSummary] = []
+    with _connect(path) as conn:
+        run_rows = conn.execute(
+            f"SELECT * FROM runs {where} ORDER BY started_at DESC {limit_clause}",
+            params,
+        ).fetchall()
+        for r in run_rows:
+            agg = conn.execute(
+                """SELECT COUNT(*) AS n,
+                          COUNT(DISTINCT agent_id) AS agents,
+                          COALESCE(SUM(tokens_in), 0) AS tin,
+                          COALESCE(SUM(tokens_out), 0) AS tout
+                   FROM trajectory_events WHERE run_id = ?""",
+                (r["run_id"],),
+            ).fetchone()
+            ev_rows = conn.execute(
+                "SELECT model, tokens_in, tokens_out FROM trajectory_events WHERE run_id = ?",
+                (r["run_id"],),
+            ).fetchall()
+            cost = sum(
+                event_cost(e["model"], e["tokens_in"], e["tokens_out"]) for e in ev_rows
+            )
+            out.append(
+                RunSummary(
+                    run_id=r["run_id"],
+                    status=r["status"],
+                    topology=r["topology"],
+                    started_at=datetime.fromisoformat(r["started_at"])
+                    if r["started_at"]
+                    else None,
+                    ended_at=datetime.fromisoformat(r["ended_at"])
+                    if r["ended_at"]
+                    else None,
+                    agent_count=int(agg["agents"]),
+                    total_tokens_in=int(agg["tin"]),
+                    total_tokens_out=int(agg["tout"]),
+                    total_cost_usd=cost,
+                    event_count=int(agg["n"]),
+                    parent_run_id=r["parent_run_id"],
+                    branch_from_step=r["branch_from_step"],
+                    goal=r["goal"],
+                    spec_id=r["spec_id"],
+                )
+            )
+    return out
