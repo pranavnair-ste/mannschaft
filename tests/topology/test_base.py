@@ -15,6 +15,7 @@ from pi_harness.topology.base import (
     Topology,
     TaskDef,
 )
+from pi_harness.topology.sequential import SequentialTopology
 
 
 class TestEnums:
@@ -135,3 +136,22 @@ class TestTopologyAbstract:
             pass
         with pytest.raises(TypeError):
             Broken()
+
+
+class TestBuildTemplateDictGuard:
+    def test_empty_agents_raises_value_error(self):
+        """build_template_dict must raise ValueError (not IndexError) when
+        spec.agents is empty.
+
+        Fix 4: A guard at the top of build_template_dict raises ValueError
+        with a message matching 'at least one agent'.
+        """
+        spec = RunSpec(
+            goal="empty",
+            agents=[],
+            mode=TopologyMode.SEQUENTIAL,
+            sync_mode=SyncMode.PER_AGENT,
+            corpus_classifications=[],
+        )
+        with pytest.raises(ValueError, match="at least one agent"):
+            SequentialTopology().build_template_dict(spec)

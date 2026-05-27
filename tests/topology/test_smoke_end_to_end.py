@@ -102,10 +102,10 @@ def real_cfg(tmp_path_factory, monkeypatch_module):
 
 def test_smoke_coordinator_sequential(real_cfg):
     """End-to-end: Coordinator runs a 2-agent Sequential topology to completion."""
+    import pi_harness.improve.runner as improve_runner_module
     from pi_harness.clawteam import ClawTeamClient
     from pi_harness.clawteam_profile import build_profile_specs
     from pi_harness.corpus.reader import CorpusReader
-    from pi_harness.improve.runner import run_for_completed_run
     from pi_harness.topology.base import AgentSpec, ModelTier, Role, RunSpec, SyncMode, TopologyMode
     from pi_harness.topology.coordinator import Coordinator
 
@@ -123,28 +123,20 @@ def test_smoke_coordinator_sequential(real_cfg):
     # CorpusReader backed by the config corpus root (may be empty — that's fine).
     corpus_reader = CorpusReader(real_cfg.corpus_root)
 
-    # Wrap run_for_completed_run in a thin object so Coordinator can call
-    # .run_for_completed_run(handle). Forward the handle's session_id so any
-    # corpus entries the improve agent writes are stamped with this session.
-    class _ImproveRunner:
-        def run_for_completed_run(self, handle):
-            return run_for_completed_run(
-                handle.run_id, real_cfg, session_id=handle.session_id
-            )
-
-    improve_runner = _ImproveRunner()
+    # Pass the improve runner MODULE directly — Coordinator calls
+    # improve_runner_module.run_for_completed_run(run_id, config, session_id=...)
+    # which is the real function signature.
+    coordinator = Coordinator(real_cfg, client, corpus_reader, improve_runner_module)
 
     # -- Wrap methods we want to count (wraps= keeps real behaviour) ----------
 
     template_file: list[Path] = []  # populated in finally via call_args
 
-    coordinator = Coordinator(real_cfg, client, corpus_reader, improve_runner)
-
     handle = None
     with (
         patch.object(client, "create_task", wraps=client.create_task) as mock_create_task,
         patch.object(client, "install_template", wraps=client.install_template) as mock_install_template,
-        patch.object(improve_runner, "run_for_completed_run", wraps=improve_runner.run_for_completed_run) as mock_improve,
+        patch.object(improve_runner_module, "run_for_completed_run", wraps=improve_runner_module.run_for_completed_run) as mock_improve,
     ):
         # -- Build a minimal 2-agent Sequential RunSpec ----------------------
 

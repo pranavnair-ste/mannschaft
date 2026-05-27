@@ -121,7 +121,13 @@ class Topology(ABC):
 
         Subclasses may override for topology-specific tweaks (e.g. Nested
         appends agents from a child team).
+
+        Raises:
+            ValueError: If ``spec.agents`` is empty (no leader can be chosen).
         """
+        if not spec.agents:
+            raise ValueError("build_template_dict requires at least one agent")
+
         from pi_harness.clawteam_profile import ROLE_PROFILE_MAP
 
         # First agent (lowest task index) is the leader. Subclasses can

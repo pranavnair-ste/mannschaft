@@ -60,6 +60,21 @@ class Coordinator:
         corpus_reader,
         improve_runner,
     ) -> None:
+        """Initialise the Coordinator.
+
+        Args:
+            config: A :class:`pi_harness.config.Config` instance. Forwarded
+                to ``improve_runner.run_for_completed_run`` as the second
+                positional argument.
+            clawteam_client: A :class:`pi_harness.clawteam.ClawTeamClient`
+                (or compatible mock).
+            corpus_reader: An object exposing
+                ``prime(token_budget, classifications, session_id)`` — typically
+                :class:`pi_harness.corpus.reader.CorpusReader`.
+            improve_runner: Object exposing
+                ``run_for_completed_run(run_id: str, config, *, session_id=None)``
+                — typically the ``pi_harness.improve.runner`` module itself.
+        """
         self._config = config
         self._clawteam_client = clawteam_client
         self._corpus_reader = corpus_reader
@@ -167,7 +182,9 @@ class Coordinator:
         iff the run succeeded."""
         result = self._last_result.get(handle.run_id)
         if result is not None and result.success:
-            self._improve_runner.run_for_completed_run(handle)
+            self._improve_runner.run_for_completed_run(
+                handle.run_id, self._config, session_id=handle.session_id
+            )
 
     def _apply_sync_mode(self, template_dict: dict, spec: RunSpec) -> None:
         """In SYNC_ALL mode, force every agent (leader + workers) onto a

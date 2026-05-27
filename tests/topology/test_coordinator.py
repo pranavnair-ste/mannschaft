@@ -174,6 +174,11 @@ class TestCoordinatorWaitAndImprove:
         coord.wait_for_completion(handle, timeout=60)
         coord.on_completion(handle)
         assert coord._improve_runner.run_for_completed_run.call_count == 1
+        # Fix 2: on_completion must use the real run_for_completed_run signature:
+        # run_for_completed_run(run_id: str, config, *, session_id=...)
+        coord._improve_runner.run_for_completed_run.assert_called_once_with(
+            handle.run_id, coord._config, session_id=handle.session_id
+        )
 
     def test_on_completion_skipped_on_failure(self, coord, basic_spec):
         from pi_harness.clawteam import ClawTeamTimeout
@@ -190,10 +195,18 @@ class TestCoordinatorTemplateEmission:
     def test_installs_template_before_launch(self, coord, basic_spec):
         """Coordinator must register the template via install_template before
         calling launch_team (real ClawTeam requires the template to exist on
-        disk first)."""
+        disk first).
+
+        Fix 3: Assert ordering is actually verified, not just that both were called.
+        """
         coord.launch(basic_spec)
         assert coord._clawteam_client.install_template.called
         assert coord._clawteam_client.launch_team.called
+        # Verify actual call order: install_template must precede launch_team.
+        names = [c[0] for c in coord._clawteam_client.mock_calls]
+        assert names.index("install_template") < names.index("launch_team"), (
+            f"install_template must be called before launch_team; call order was: {names}"
+        )
 
     def test_seeds_task_dag_via_create_task(self, coord, basic_spec):
         """For each TaskDef returned by topology.plan, Coordinator must call
