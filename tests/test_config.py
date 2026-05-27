@@ -85,6 +85,21 @@ def test_config_missing_key_raises(monkeypatch):
         load_config(env_file=None)
 
 
+def test_config_repr_masks_api_key(monkeypatch):
+    """Config repr must NOT contain the API key — it leaks into tracebacks/logs
+    otherwise (pytest prints fixture values, logging prints config, etc.)."""
+    from pi_harness.config import load_config
+
+    secret = "sk-proj-SUPERSECRETVALUE-do-not-leak"
+    monkeypatch.setenv("OPENAI_API_KEY", secret)
+    cfg = load_config(env_file=None)
+
+    assert secret not in repr(cfg)
+    assert secret not in str(cfg)
+    # The value is still accessible programmatically.
+    assert cfg.openai_api_key == secret
+
+
 def test_config_is_frozen(monkeypatch):
     """Config dataclass must be immutable to prevent accidental mutation by callers."""
     from pi_harness.config import load_config

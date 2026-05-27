@@ -139,13 +139,16 @@ class TestCoordinatorWaitAndImprove:
     def test_wait_for_completion_returns_run_result_on_success(self, coord, basic_spec):
         handle = coord.launch(basic_spec)
         coord._clawteam_client.wait_for_completion.return_value = True
+        # ClawTeam's `task list --json` keys the id as "id" (real board shape).
         coord._clawteam_client.list_tasks.return_value = [
-            {"task_id": "t1", "status": "completed"}
+            {"id": "t1", "status": "completed"},
+            {"id": "t2", "status": "completed"},
         ]
         out = coord.wait_for_completion(handle, timeout=60)
         assert out.success is True
         assert out.error is None
-        assert out.terminal_statuses == {"t1": "completed"}
+        # Each task keeps its own id — must NOT collapse to a single "" key.
+        assert out.terminal_statuses == {"t1": "completed", "t2": "completed"}
 
     def test_wait_for_completion_captures_timeout_as_error(self, coord, basic_spec):
         from pi_harness.clawteam import ClawTeamTimeout
