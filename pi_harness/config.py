@@ -7,7 +7,7 @@ here and never re-read environment variables themselves.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -42,7 +42,7 @@ class Config:
         trajectory_db_path: SQLite file path for the trajectory store (Plan 2).
     """
 
-    openai_api_key: str
+    openai_api_key: str = field(repr=False)  # never echo the secret in reprs/tracebacks/logs
     reasoning_model: str
     fast_model: str
     clawteam_state_dir: Path
