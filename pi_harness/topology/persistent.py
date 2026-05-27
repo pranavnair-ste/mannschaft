@@ -1,7 +1,8 @@
 """Persistent topology: session_id tags trajectory + corpus subset for reuse."""
 from __future__ import annotations
 
-from pi_harness.topology.base import RunSpec, TaskDef
+from pi_harness.corpus.format import Classification
+from pi_harness.topology.base import DEFAULT_PRIME_TOKEN_BUDGET, RunSpec, TaskDef
 from pi_harness.topology.sequential import SequentialTopology
 
 
@@ -26,8 +27,18 @@ class PersistentTopology(SequentialTopology):
         return dct
 
     def prime_corpus(self, spec: RunSpec, reader) -> list:
-        """Wrapper around Plan 3's reader.prime that forces session_id filter."""
+        """Wrapper around the corpus reader's prime that forces the session_id filter.
+
+        Persistent runs prime from their own session's accumulated knowledge plus
+        global (session-less) entries — see CorpusReader.prime session semantics.
+        """
+        classifications = (
+            [Classification(c) for c in spec.corpus_classifications]
+            if spec.corpus_classifications
+            else None
+        )
         return reader.prime(
-            classifications=spec.corpus_classifications,
+            token_budget=DEFAULT_PRIME_TOKEN_BUDGET,
+            classifications=classifications,
             session_id=spec.session_id,
         )

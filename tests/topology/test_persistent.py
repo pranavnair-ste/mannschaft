@@ -5,8 +5,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from pi_harness.corpus.format import Classification
 from pi_harness.topology.base import (
     AgentSpec, ModelTier, Role, RunSpec, SyncMode, TopologyMode,
+    DEFAULT_PRIME_TOKEN_BUDGET,
 )
 from pi_harness.topology.persistent import PersistentTopology
 
@@ -53,4 +55,26 @@ class TestPersistentPlan:
         assert mock_reader.prime.call_count == 2
         for call in mock_reader.prime.call_args_list:
             assert call.kwargs.get("session_id") == "session-xyz"
-            assert call.kwargs.get("classifications") == ["tactical"]
+            assert call.kwargs.get("classifications") == [Classification.TACTICAL]
+            assert call.kwargs.get("token_budget") == DEFAULT_PRIME_TOKEN_BUDGET
+
+    def test_prime_empty_classifications_pass_none(self):
+        """Empty corpus_classifications should pass classifications=None to reader."""
+        top = PersistentTopology()
+        spec = RunSpec(
+            goal="persistent goal",
+            agents=[
+                AgentSpec(name="p1", role=Role.BUILDER, model_tier=ModelTier.FAST),
+            ],
+            mode=TopologyMode.PERSISTENT,
+            sync_mode=SyncMode.PER_AGENT,
+            corpus_classifications=[],
+            session_id="session-empty",
+        )
+        mock_reader = MagicMock()
+        mock_reader.prime.return_value = []
+        top.prime_corpus(spec, reader=mock_reader)
+        assert mock_reader.prime.call_count == 1
+        call = mock_reader.prime.call_args_list[0]
+        assert call.kwargs.get("classifications") is None
+        assert call.kwargs.get("token_budget") == DEFAULT_PRIME_TOKEN_BUDGET

@@ -15,6 +15,10 @@ if TYPE_CHECKING:
     from pi_harness.improve.runner import ImproveResult
 
 
+# metadata-tier priming budget; topology owns this per Decision §5
+DEFAULT_PRIME_TOKEN_BUDGET = 4000
+
+
 class TopologyMode(str, Enum):
     SEQUENTIAL = "sequential"
     PARALLEL = "parallel"

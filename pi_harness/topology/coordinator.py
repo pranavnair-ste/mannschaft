@@ -19,6 +19,7 @@ from pi_harness.clawteam import (
 )
 from pi_harness.clawteam_profile import PROFILE_NAME_FAST
 from pi_harness.topology.base import (
+    DEFAULT_PRIME_TOKEN_BUDGET,
     RunHandle,
     RunResult,
     RunSpec,
@@ -31,9 +32,6 @@ from pi_harness.topology.parallel import ParallelTopology
 from pi_harness.topology.persistent import PersistentTopology
 from pi_harness.topology.sequential import SequentialTopology
 from pi_harness.topology.synthesis import SynthesisTopology
-
-# metadata-tier priming budget; topology owns this per Decision §5
-DEFAULT_PRIME_TOKEN_BUDGET = 4000
 
 
 def _get_topology_registry() -> dict[TopologyMode, type[Topology]]:
