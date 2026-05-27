@@ -123,15 +123,19 @@ def test_bridge_invalid_sync_mode_raises() -> None:
         spec_to_runspec(_spec(sync_mode="bogus"), _tasks())
 
 
-def test_runspec_consumable_by_real_coordinator() -> None:
+def test_runspec_consumable_by_real_coordinator(tmp_path) -> None:
     rs = spec_to_runspec(_spec(), _tasks())
 
     client = MagicMock()
     reader = MagicMock()
     reader.prime.return_value = []
     improve = MagicMock()
+    cfg = MagicMock()
+    cfg.trajectory_db_path = tmp_path / "trajectory.db"
+    cfg.reasoning_model = "gpt-5"
+    cfg.fast_model = "gpt-5-mini"
     coord = Coordinator(
-        config=MagicMock(),
+        config=cfg,
         clawteam_client=client,
         corpus_reader=reader,
         improve_runner=improve,
