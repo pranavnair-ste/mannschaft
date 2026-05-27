@@ -63,6 +63,13 @@ class TimelineDTO(BaseModel):
     agents: list[AgentTimelineRowDTO]
 
 
+class ReliabilityDTO(BaseModel):
+    consistency: float | None = None
+    robustness: float | None = None
+    predictability: float | None = None
+    safety: float | None = None
+
+
 class BranchRequest(BaseModel):
     step_id: str
     overrides: dict[str, Any] = Field(default_factory=dict)

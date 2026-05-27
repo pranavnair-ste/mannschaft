@@ -8,11 +8,13 @@ from pi_harness.api.models import (
     AgentTimelineRowDTO,
     BranchRequest,
     BranchResponse,
+    ReliabilityDTO,
     RunDetailDTO,
     RunSummaryDTO,
     TimelineDTO,
     TrajectoryEventDTO,
 )
+from pi_harness.api.reliability import compute_reliability
 from pi_harness.trajectory.runs import get_run, query_run_summaries
 from pi_harness.trajectory.store import query_events
 
@@ -78,3 +80,11 @@ def branch_run(request: Request, run_id: str, body: BranchRequest) -> BranchResp
     return BranchResponse(
         run_id=handle.run_id, parent_run_id=run_id, branched_from_step=body.step_id
     )
+
+
+@router.get("/runs/{run_id}/reliability", response_model=ReliabilityDTO)
+def get_reliability(request: Request, run_id: str) -> ReliabilityDTO:
+    if not _run_exists(request, run_id):
+        raise HTTPException(status_code=404, detail="run not found")
+    events = query_events(run_id=run_id, db_path=_db(request))
+    return ReliabilityDTO(**compute_reliability(events))
