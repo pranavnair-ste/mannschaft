@@ -58,7 +58,11 @@ def create_app(config: Config, dash: DashboardConfig | None = None) -> FastAPI:
     # Factory the branch route uses to build a Coordinator; overridable in tests.
     app.state.coordinator_factory = build_coordinator
     app.include_router(runs_router)
-    # corpus / guards / ws routers are added in later tasks.
+
+    from pi_harness.api.routes.corpus import router as corpus_router
+
+    app.include_router(corpus_router)
+    # guards / ws routers are added in later tasks.
     return app
 
 

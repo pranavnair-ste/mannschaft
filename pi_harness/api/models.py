@@ -72,3 +72,32 @@ class BranchResponse(BaseModel):
     run_id: str
     parent_run_id: str
     branched_from_step: str
+
+
+class CorpusEntryDTO(BaseModel):
+    id: str
+    record_type: str
+    classification: str
+    helpful_count: int
+    harmful_count: int
+    contradiction_count: int
+    created_at: datetime
+    last_updated_at: datetime
+    last_referenced_run_id: str | None = None
+    session_id: str | None = None
+    size_tokens: int
+    archived: bool = False
+    body_preview: str
+
+
+class CorpusHealthDTO(BaseModel):
+    total_active_tokens: int
+    soft_cap_tokens: int
+    pct_of_cap: float
+    foundational_count: int
+    tactical_count: int
+    observational_count: int
+    archived_count: int
+    prune_candidates: dict[str, int]
+    stale_entries: list[CorpusEntryDTO]
+    recently_archived: list[CorpusEntryDTO]
