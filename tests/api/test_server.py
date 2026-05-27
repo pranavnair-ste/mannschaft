@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 
 def test_healthz(client):
     r = client.get("/healthz")
@@ -14,7 +12,6 @@ def test_openapi_lists_specs_route(client):
     assert "/specs" in paths
 
 
-@pytest.mark.xfail(reason="runs router added in Task 4.2", strict=True)
 def test_openapi_lists_runs_route(client):
     paths = client.get("/openapi.json").json()["paths"]
     assert "/runs" in paths

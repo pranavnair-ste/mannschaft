@@ -51,7 +51,11 @@ def create_app(config: Config, dash: DashboardConfig | None = None) -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(spec_router)  # routes already prefixed with /specs
-    # runs / corpus / guards / ws routers are added in later tasks.
+
+    from pi_harness.api.routes.runs import router as runs_router
+
+    app.include_router(runs_router)
+    # corpus / guards / ws routers are added in later tasks.
     return app
 
 
