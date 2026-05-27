@@ -51,3 +51,13 @@ class TrajectoryEventDTO(BaseModel):
 class RunDetailDTO(BaseModel):
     summary: RunSummaryDTO
     events: list[TrajectoryEventDTO]
+
+
+class AgentTimelineRowDTO(BaseModel):
+    agent_id: str
+    events: list[TrajectoryEventDTO]
+
+
+class TimelineDTO(BaseModel):
+    run_id: str
+    agents: list[AgentTimelineRowDTO]

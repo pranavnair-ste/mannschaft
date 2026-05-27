@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from pi_harness.api.models import RunDetailDTO, RunSummaryDTO, TrajectoryEventDTO
+from pi_harness.api.models import (
+    AgentTimelineRowDTO,
+    RunDetailDTO,
+    RunSummaryDTO,
+    TimelineDTO,
+    TrajectoryEventDTO,
+)
 from pi_harness.trajectory.runs import query_run_summaries
 from pi_harness.trajectory.store import query_events
 
@@ -35,4 +43,22 @@ def get_run_detail(request: Request, run_id: str) -> RunDetailDTO:
     return RunDetailDTO(
         summary=RunSummaryDTO(**vars(match)),
         events=[TrajectoryEventDTO(**vars(e)) for e in events],
+    )
+
+
+def _run_exists(request: Request, run_id: str) -> bool:
+    return any(s.run_id == run_id for s in query_run_summaries(db_path=_db(request)))
+
+
+@router.get("/runs/{run_id}/timeline", response_model=TimelineDTO)
+def get_timeline(request: Request, run_id: str) -> TimelineDTO:
+    if not _run_exists(request, run_id):
+        raise HTTPException(status_code=404, detail="run not found")
+    events = query_events(run_id=run_id, db_path=_db(request))
+    grouped: "OrderedDict[str, list[TrajectoryEventDTO]]" = OrderedDict()
+    for e in sorted(events, key=lambda ev: ev.ts):
+        grouped.setdefault(e.agent_id, []).append(TrajectoryEventDTO(**vars(e)))
+    return TimelineDTO(
+        run_id=run_id,
+        agents=[AgentTimelineRowDTO(agent_id=a, events=evs) for a, evs in grouped.items()],
     )
