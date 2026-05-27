@@ -502,6 +502,76 @@ class TestCoordinatorRunRegistry:
         assert row["status"] == "failed"
 
 
+class TestCoordinatorBranch:
+    def _register_parent(self, coord, spec, run_id="parent-1", status="succeeded"):
+        from datetime import datetime, timezone
+        from pi_harness.topology.runspec_codec import runspec_to_json
+        from pi_harness.trajectory.runs import register_run
+
+        register_run(
+            run_id=run_id, spec_id=spec.spec_id, topology=spec.mode.value,
+            sync_mode=spec.sync_mode.value, session_id=spec.session_id, goal=spec.goal,
+            team_name="parent-team", started_at=datetime(2026, 5, 28, tzinfo=timezone.utc),
+            run_spec_json=runspec_to_json(spec), status=status,
+            db_path=coord._config.trajectory_db_path,
+        )
+        return run_id
+
+    def test_branch_launches_child_with_lineage(self, coord, basic_spec):
+        from pi_harness.topology.base import RunHandle
+        from pi_harness.trajectory.runs import get_run
+
+        parent = self._register_parent(coord, basic_spec)
+        handle = coord.branch(parent, step_id="s-2", overrides={"model_tier": "reasoning"})
+        assert isinstance(handle, RunHandle)
+        assert handle.run_id != parent
+        assert coord._clawteam_client.launch_team.called
+        row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
+        assert row["parent_run_id"] == parent
+        assert row["branch_from_step"] == "s-2"
+        assert row["overrides"] == {"model_tier": "reasoning"}
+        assert row["status"] == "running"
+
+    def test_branch_applies_override_to_child_runspec(self, coord):
+        from pi_harness.topology.runspec_codec import runspec_from_json
+        from pi_harness.trajectory.runs import get_run
+
+        # parallel needs >=3 agents, so build a 3-agent parent spec
+        three = RunSpec(
+            goal="g",
+            agents=[
+                AgentSpec(name="lead", role=Role.ORCHESTRATOR, model_tier=ModelTier.REASONING),
+                AgentSpec(name="w", role=Role.BUILDER, model_tier=ModelTier.FAST),
+                AgentSpec(name="m", role=Role.REVIEWER, model_tier=ModelTier.REASONING),
+            ],
+            mode=TopologyMode.SEQUENTIAL,
+            sync_mode=SyncMode.PER_AGENT,
+            corpus_classifications=[],
+        )
+        parent = self._register_parent(coord, three, run_id="parent-3")
+        handle = coord.branch(parent, step_id="s-1", overrides={"topology": "parallel"})
+        row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
+        child_spec = runspec_from_json(row["run_spec_json"])
+        assert child_spec.mode.value == "parallel"
+
+    def test_branch_unknown_parent_raises(self, coord):
+        with pytest.raises(ValueError, match="unknown parent run"):
+            coord.branch("ghost", step_id="s-1", overrides={})
+
+    def test_branch_parent_without_runspec_raises(self, coord, basic_spec):
+        from datetime import datetime, timezone
+        from pi_harness.trajectory.runs import register_run
+
+        register_run(
+            run_id="bare", spec_id=None, topology="sequential", sync_mode="per_agent",
+            session_id=None, goal="g", team_name="t",
+            started_at=datetime(2026, 5, 28, tzinfo=timezone.utc), run_spec_json="",
+            db_path=coord._config.trajectory_db_path,
+        )
+        with pytest.raises(ValueError, match="no stored RunSpec"):
+            coord.branch("bare", step_id="s-1", overrides={})
+
+
 class TestCoordinatorTrajectoryCapture:
     def test_launch_initializes_trajectory_db(self, coord, basic_spec):
         coord.launch(basic_spec)

@@ -143,8 +143,13 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def get_run(run_id: str, *, db_path: Path | str | None = None) -> dict[str, Any] | None:
-    """Return the raw run row as a dict (overrides JSON-decoded), or None."""
+    """Return the raw run row as a dict (overrides JSON-decoded), or None.
+
+    Tolerates an uninitialized db (returns None) so read-only callers never
+    crash on a fresh path.
+    """
     path = _resolve_db_path(db_path)
+    init_runs_table(path)
     with _connect(path) as conn:
         row = conn.execute(
             "SELECT * FROM runs WHERE run_id = ?", (run_id,)
@@ -160,6 +165,7 @@ def query_run_summaries(
 ) -> list[RunSummary]:
     """Join registry rows with aggregated event stats; derive cost per run."""
     path = _resolve_db_path(db_path)
+    init_runs_table(path)
     clauses: list[str] = []
     params: list[Any] = []
     if status is not None:

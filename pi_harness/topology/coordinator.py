@@ -182,6 +182,57 @@ class Coordinator:
         )
         return handle
 
+    def branch(
+        self,
+        parent_run_id: str,
+        step_id: str,
+        overrides: dict | None = None,
+    ) -> RunHandle:
+        """Level-1 branch: reload the parent's RunSpec, apply overrides, launch a
+        child tagged with lineage.
+
+        This is NOT mid-run replay — it re-runs the work from the parent's spec
+        with a tweak (model_tier/topology/sync_mode/goal). The parent run must
+        have been registered with a stored RunSpec.
+        """
+        from pi_harness.topology.runspec_codec import (
+            apply_overrides,
+            runspec_from_json,
+            runspec_to_json,
+        )
+        from pi_harness.trajectory.runs import get_run, register_run
+
+        parent = get_run(parent_run_id, db_path=self._config.trajectory_db_path)
+        if parent is None:
+            raise ValueError(f"unknown parent run {parent_run_id!r}")
+        if not parent.get("run_spec_json"):
+            raise ValueError("cannot branch: parent has no stored RunSpec")
+
+        spec = runspec_from_json(parent["run_spec_json"])
+        if overrides:
+            spec = apply_overrides(spec, overrides)
+
+        handle = self.launch(spec)  # registers the child as running
+
+        # Re-register to stamp lineage onto the freshly-created child row.
+        register_run(
+            run_id=handle.run_id,
+            spec_id=spec.spec_id,
+            topology=spec.mode.value,
+            sync_mode=spec.sync_mode.value,
+            session_id=spec.session_id,
+            goal=spec.goal,
+            team_name=handle.team_name,
+            started_at=handle.started_at,
+            run_spec_json=runspec_to_json(spec),
+            status="running",
+            parent_run_id=parent_run_id,
+            branch_from_step=step_id,
+            overrides=overrides or {},
+            db_path=self._config.trajectory_db_path,
+        )
+        return handle
+
     def wait_for_completion(self, handle: RunHandle, timeout: float) -> RunResult:
         """Block on Plan 1's wait_for_completion, capturing task transitions into
         the trajectory store as they happen, then summarize as RunResult."""
