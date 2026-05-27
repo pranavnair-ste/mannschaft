@@ -314,3 +314,96 @@ def test_find_unreferenced_skips_archived(tmp_corpus_root: Path) -> None:
         reader = CorpusReader(tmp_corpus_root)
         results = reader.find_unreferenced(days=7, now=now)
         assert entry.id not in {r.id for r in results}
+
+
+# ---------------------------------------------------------------------------
+# prime: session_id filtering
+# ---------------------------------------------------------------------------
+
+
+def _make_entry_with_session(body, session_id=None, classification=None, now=None):
+    """Like _make_entry but forwards session_id to CorpusEntry.new."""
+    from pi_harness.corpus.format import (
+        Classification,
+        CorpusEntry,
+        RecordType,
+    )
+
+    return CorpusEntry.new(
+        record_type=RecordType.PATTERN,
+        classification=classification or Classification.TACTICAL,
+        body=body,
+        now=now or datetime(2026, 5, 25, tzinfo=timezone.utc),
+        session_id=session_id,
+    )
+
+
+def _make_session_corpus(tmp_corpus_root):
+    """Write three entries: session_id=None, 'A', 'B'. Returns (none_entry, a_entry, b_entry)."""
+    now = datetime(2026, 5, 25, tzinfo=timezone.utc)
+    none_entry = _make_entry_with_session("# global entry\nglobal body", session_id=None, now=now)
+    a_entry = _make_entry_with_session("# session A entry\nA body", session_id="A", now=now)
+    b_entry = _make_entry_with_session("# session B entry\nB body", session_id="B", now=now)
+    for e in (none_entry, a_entry, b_entry):
+        _write(tmp_corpus_root, e, now)
+    return none_entry, a_entry, b_entry
+
+
+def test_prime_session_none_returns_all(tmp_corpus_root: Path) -> None:
+    """session_id=None (default) returns all entries regardless of their session_id."""
+    from pi_harness.corpus.reader import CorpusReader
+
+    none_entry, a_entry, b_entry = _make_session_corpus(tmp_corpus_root)
+    reader = CorpusReader(tmp_corpus_root)
+    now = datetime(2026, 5, 25, tzinfo=timezone.utc)
+
+    primed = reader.prime(token_budget=10_000, session_id=None, now=now)
+    ids = {e.id for e in primed}
+    assert len(primed) == 3
+    assert none_entry.id in ids
+    assert a_entry.id in ids
+    assert b_entry.id in ids
+
+
+def test_prime_session_filters_to_matching_plus_global(tmp_corpus_root: Path) -> None:
+    """session_id='A' returns entries where entry.session_id == 'A' or is None."""
+    from pi_harness.corpus.reader import CorpusReader
+
+    none_entry, a_entry, b_entry = _make_session_corpus(tmp_corpus_root)
+    reader = CorpusReader(tmp_corpus_root)
+    now = datetime(2026, 5, 25, tzinfo=timezone.utc)
+
+    primed = reader.prime(token_budget=10_000, session_id="A", now=now)
+    ids = {e.id for e in primed}
+    assert len(primed) == 2
+    assert none_entry.id in ids
+    assert a_entry.id in ids
+    assert b_entry.id not in ids
+
+
+def test_prime_session_excludes_other_sessions(tmp_corpus_root: Path) -> None:
+    """A B-only entry must not appear in prime(session_id='A') results."""
+    from pi_harness.corpus.reader import CorpusReader
+
+    _none_entry, _a_entry, b_entry = _make_session_corpus(tmp_corpus_root)
+    reader = CorpusReader(tmp_corpus_root)
+    now = datetime(2026, 5, 25, tzinfo=timezone.utc)
+
+    primed = reader.prime(token_budget=10_000, session_id="A", now=now)
+    ids = {e.id for e in primed}
+    assert b_entry.id not in ids
+
+
+def test_module_prime_forwards_session_id(tmp_corpus_root: Path) -> None:
+    """Module-level prime() must forward session_id to CorpusReader.prime."""
+    import pi_harness.corpus.reader as reader_mod
+
+    none_entry, a_entry, b_entry = _make_session_corpus(tmp_corpus_root)
+    now = datetime(2026, 5, 25, tzinfo=timezone.utc)
+
+    primed = reader_mod.prime(tmp_corpus_root, token_budget=10_000, session_id="A", now=now)
+    ids = {e.id for e in primed}
+    assert len(primed) == 2
+    assert none_entry.id in ids
+    assert a_entry.id in ids
+    assert b_entry.id not in ids

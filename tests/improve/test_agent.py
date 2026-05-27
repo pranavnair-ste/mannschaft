@@ -135,6 +135,7 @@ def _make_entry(
         created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         last_updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         last_referenced_run_id=None,
+        session_id=None,
         size_tokens=len(body) // 4,
     )
 
@@ -426,6 +427,7 @@ def _entry_from_dict(d: dict) -> CorpusEntry:
         created_at=datetime.fromisoformat(d["created_at"]),
         last_updated_at=datetime.fromisoformat(d["last_updated_at"]),
         last_referenced_run_id=d.get("last_referenced_run_id"),
+        session_id=d.get("session_id"),
         size_tokens=d["size_tokens"],
     )
 

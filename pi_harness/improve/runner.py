@@ -114,13 +114,21 @@ def _trigger_to_action(trigger: PruneTrigger) -> PruneAction:
 def _to_curator_updates(
     updates: Sequence[ProposedUpdate],
     now: datetime,
+    session_id: Optional[str] = None,
 ) -> list[CuratorUpdate]:
     """Convert improve-agent candidates to Plan-3 curator-input updates.
 
     Each :class:`ProposedUpdate` becomes a ``kind='new'`` curator update
     with a freshly-minted :class:`CorpusEntry` (id derived from
     ``record_type + body``, counters zeroed, timestamps = ``now``,
-    ``last_referenced_run_id = source_run_id``).
+    ``last_referenced_run_id = source_run_id``,
+    ``session_id = session_id``).
+
+    Args:
+        updates: Agent-emitted update proposals.
+        now: Timestamp to use for ``created_at`` / ``last_updated_at``.
+        session_id: The session that owns this run; stamped onto any new
+            corpus entries so they can be primed session-scoped later.
     """
     curator_updates: list[CuratorUpdate] = []
     for u in updates:
@@ -129,6 +137,7 @@ def _to_curator_updates(
             classification=u.classification,
             body=u.body,
             now=now,
+            session_id=session_id,
         )
         entry = replace(entry, last_referenced_run_id=u.source_run_id)
         curator_updates.append(
@@ -168,6 +177,7 @@ def run_for_completed_run(
     agent: Optional[ImproveAgent] = None,
     curator: Optional[Curator] = None,
     project_diff_text: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> ImproveReport:
     """Analyze one completed run and forward candidates to the curator.
 
@@ -180,6 +190,9 @@ def run_for_completed_run(
         project_diff_text: Optional project-code diff. If provided, this is
             passed to :meth:`ImproveAgent.analyze` instead of the
             corpus-only diff (v2 hook per Plan 4 unresolved decision #3).
+        session_id: The session that owns this run; stamped onto any new
+            corpus entries so they can be primed session-scoped later.
+            ``None`` (default) preserves existing caller behavior.
 
     Returns:
         :class:`ImproveReport`.
@@ -232,7 +245,7 @@ def run_for_completed_run(
         curator = Curator(config)
 
     now = datetime.now(timezone.utc)
-    curator_updates = _to_curator_updates(updates, now)
+    curator_updates = _to_curator_updates(updates, now, session_id=session_id)
     curator_prunes = _to_curator_prunes(prunes)
 
     # Provide the current run as the only "recent" run id so the curator's
