@@ -342,6 +342,27 @@ class Curator:
         else:  # pragma: no cover
             raise ValueError(f"Unknown CandidateUpdate.kind={update.kind!r}")
 
+    def restore_archived(self, entry_id: str, now: Optional[datetime] = None) -> CorpusEntry:
+        """Un-archive an entry: move it from ``archived/`` back to its active
+        classification dir and commit. Mirrors the archive path in reverse.
+
+        Raises:
+            FileNotFoundError: If no archived entry with ``entry_id`` exists.
+        """
+        now = now or datetime.now(timezone.utc)
+        archive_path = _find_archived_entry_path(self.root, entry_id)
+        if archive_path is None:
+            raise FileNotFoundError(f"no archived corpus entry {entry_id!r}")
+
+        entry = parse_entry(archive_path)
+        repo = self._ensure_git()
+        with writer.curator_context():
+            writer.write_entry(entry, self.root, now)
+            archive_path.unlink()
+        repo.git.add(A=True)
+        repo.index.commit(f"restore: un-archive {entry_id}")
+        return entry
+
     def _filter_foundational_archives(
         self, actions: List[PruneAction]
     ) -> List[PruneAction]:
