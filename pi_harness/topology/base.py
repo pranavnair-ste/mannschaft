@@ -107,6 +107,31 @@ class RunResult:
     error: Exception | None = None             # set when wait_for_completion raised
 
 
+def completion_protocol(agent_name: str) -> str:
+    """Standing ClawTeam completion instructions appended to every agent's task.
+
+    Decomposer-driven agents otherwise receive only the task description (the
+    *what*) and never learn how to CLOSE a task on the ClawTeam board, so the
+    run hangs until timeout. This envelope teaches the *how*; the agent name is
+    interpolated and the team name is read from the pane's CLAWTEAM_TEAM_NAME.
+    """
+    return (
+        "\n\n---\n"
+        "ClawTeam protocol (how to complete your work):\n"
+        f"- Your agent name is '{agent_name}'. Your team name is in the "
+        "$CLAWTEAM_TEAM_NAME environment variable.\n"
+        "- The task board is ALREADY seeded — do NOT create new tasks.\n"
+        "- Find your task: run `clawteam task list \"$CLAWTEAM_TEAM_NAME\"` and "
+        f"pick the task whose owner is '{agent_name}'.\n"
+        "- If it is `blocked`, re-run that command every ~10s until it is "
+        "unblocked (its blockers were completed by other agents).\n"
+        "- Do the work described above.\n"
+        "- Then mark it done: `clawteam task update \"$CLAWTEAM_TEAM_NAME\" "
+        "<your-task-id> --status completed`.\n"
+        "- Exit once your task(s) are completed."
+    )
+
+
 class Topology(ABC):
     """Abstract base. Every named topology subclasses this."""
 
@@ -149,14 +174,16 @@ class Topology(ABC):
                 "leader": {
                     "name": leader.name,
                     "type": leader.role.value,
-                    "task": leader.task_prompt or self._default_leader_prompt(spec),
+                    "task": (leader.task_prompt or self._default_leader_prompt(spec))
+                    + completion_protocol(leader.name),
                     "profile": ROLE_PROFILE_MAP.get(leader.role.value, ""),
                 },
                 "agents": [
                     {
                         "name": a.name,
                         "type": a.role.value,
-                        "task": a.task_prompt or self._default_worker_prompt(spec, a),
+                        "task": (a.task_prompt or self._default_worker_prompt(spec, a))
+                        + completion_protocol(a.name),
                         "profile": ROLE_PROFILE_MAP.get(a.role.value, ""),
                     }
                     for a in workers
