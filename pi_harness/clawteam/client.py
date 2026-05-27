@@ -11,12 +11,13 @@ injected on every call so multiple harness instances can sandbox state.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, List, Mapping, Optional, Sequence
+from typing import Any, Callable, ClassVar, List, Mapping, Optional, Sequence
 
 from pi_harness.clawteam_profile import ProfileSpec
 from pi_harness.config import Config
@@ -29,6 +30,8 @@ __all__ = [
     "TERMINAL_STATUSES",
     "FAILURE_STATUSES",
 ]
+
+log = logging.getLogger(__name__)
 
 # Real ClawTeam 0.2.x task statuses (from `clawteam task update --help`):
 #   pending, in_progress, completed, blocked
@@ -259,8 +262,13 @@ class ClawTeamClient:
         team_name: str,
         timeout: float,
         poll_interval: float = 5.0,
+        on_poll: Optional[Callable[[List[Mapping[str, Any]]], None]] = None,
     ) -> bool:
         """Block until every task on the board reaches a terminal status.
+
+        ``on_poll`` (optional) is called with the freshly-listed tasks on every
+        poll iteration — used by the Coordinator to capture trajectory events.
+        A raising callback is logged and ignored; it never aborts the wait.
 
         Returns:
             ``True`` if all tasks finished cleanly within ``timeout``.
@@ -272,6 +280,11 @@ class ClawTeamClient:
         deadline = time.monotonic() + timeout
         while True:
             tasks = self.list_tasks(team_name)
+            if on_poll is not None:
+                try:
+                    on_poll(tasks)
+                except Exception:  # noqa: BLE001 — capture must never break the wait
+                    log.exception("wait_for_completion: on_poll callback failed")
             if tasks:
                 failed = [t for t in tasks if t.get("status") in FAILURE_STATUSES]
                 if failed:

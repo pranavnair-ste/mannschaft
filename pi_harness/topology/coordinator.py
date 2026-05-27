@@ -86,6 +86,10 @@ class Coordinator:
         #   (e.g. dashboard / trajectory layers) to inspect the seeded DAG
 
     def launch(self, spec: RunSpec) -> RunHandle:
+        # Ensure the trajectory store exists before any capture write.
+        from pi_harness.trajectory.store import init_db
+        init_db(self._config.trajectory_db_path)
+
         registry = _get_topology_registry()
         topology_cls = registry.get(spec.mode)
         if topology_cls is None:
@@ -160,12 +164,29 @@ class Coordinator:
         return handle
 
     def wait_for_completion(self, handle: RunHandle, timeout: float) -> RunResult:
-        """Block on Plan 1's wait_for_completion, then summarize as RunResult."""
+        """Block on Plan 1's wait_for_completion, capturing task transitions into
+        the trajectory store as they happen, then summarize as RunResult."""
+        from pi_harness.trajectory.capture import diff_task_states
+        from pi_harness.trajectory.store import write_event
+
+        capture_state: dict[str, str] = {}
+
+        def _capture(tasks) -> None:
+            events = diff_task_states(
+                capture_state, tasks, run_id=handle.run_id,
+                now=datetime.now(timezone.utc),
+            )
+            for ev in events:
+                try:
+                    write_event(ev, db_path=self._config.trajectory_db_path)
+                except Exception:  # noqa: BLE001 — capture must never break the wait
+                    pass
+
         error: Exception | None = None
         success = False
         try:
             success = self._clawteam_client.wait_for_completion(
-                handle.team_name, timeout=timeout, poll_interval=5.0
+                handle.team_name, timeout=timeout, poll_interval=5.0, on_poll=_capture
             )
         except (ClawTeamTimeout, ClawTeamRunFailure) as exc:
             error = exc
