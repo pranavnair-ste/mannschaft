@@ -219,7 +219,92 @@ def test_frontmatter_key_order_is_deterministic() -> None:
         "created_at:",
         "last_updated_at:",
         "last_referenced_run_id:",
+        "session_id:",
         "size_tokens:",
     ]
     indices = [out.index(k) for k in expected_order]
     assert indices == sorted(indices), f"Keys not in expected order: {out}"
+
+
+# ---------------------------------------------------------------------------
+# session_id field
+# ---------------------------------------------------------------------------
+
+
+def test_session_id_defaults_none() -> None:
+    """CorpusEntry.new() without session_id must produce session_id=None."""
+    from pi_harness.corpus.format import Classification, CorpusEntry, RecordType
+
+    now = datetime(2026, 5, 25, tzinfo=timezone.utc)
+    entry = CorpusEntry.new(
+        record_type=RecordType.PATTERN,
+        classification=Classification.TACTICAL,
+        body="some body",
+        now=now,
+    )
+    assert entry.session_id is None
+
+
+def test_session_id_set() -> None:
+    """CorpusEntry.new(session_id=...) must propagate the value."""
+    from pi_harness.corpus.format import Classification, CorpusEntry, RecordType
+
+    now = datetime(2026, 5, 25, tzinfo=timezone.utc)
+    entry = CorpusEntry.new(
+        record_type=RecordType.PATTERN,
+        classification=Classification.TACTICAL,
+        body="some body",
+        now=now,
+        session_id="sess-1",
+    )
+    assert entry.session_id == "sess-1"
+
+
+def test_session_id_roundtrips(tmp_path: Path) -> None:
+    """session_id must survive a serialize_entry → parse_entry roundtrip."""
+    from pi_harness.corpus.format import (
+        Classification,
+        CorpusEntry,
+        RecordType,
+        parse_entry,
+        serialize_entry,
+    )
+
+    now = datetime(2026, 5, 25, tzinfo=timezone.utc)
+    entry = CorpusEntry.new(
+        record_type=RecordType.PATTERN,
+        classification=Classification.TACTICAL,
+        body="roundtrip body",
+        now=now,
+        session_id="sess-1",
+    )
+    target = tmp_path / "entry.md"
+    target.write_text(serialize_entry(entry), encoding="utf-8")
+    parsed = parse_entry(target)
+    assert parsed.session_id == "sess-1"
+
+
+def test_missing_session_id_parses_as_none(tmp_path: Path) -> None:
+    """Pre-existing entries without a session_id key must parse as session_id=None."""
+    from pi_harness.corpus.format import parse_entry
+
+    # Craft minimal frontmatter without session_id to simulate a pre-existing entry.
+    content = """\
+---
+id: pattern-000000000000
+record_type: pattern
+classification: tactical
+helpful_count: 0
+harmful_count: 0
+contradiction_count: 0
+created_at: '2026-05-25T12:00:00+00:00'
+last_updated_at: '2026-05-25T12:00:00+00:00'
+last_referenced_run_id: null
+size_tokens: 3
+---
+legacy body
+"""
+    target = tmp_path / "legacy.md"
+    target.write_text(content, encoding="utf-8")
+    parsed = parse_entry(target)
+    assert parsed.session_id is None
