@@ -42,6 +42,7 @@ DEFAULT_AGENT_CLI = "codex"
 ROLE_PROFILE_MAP: Dict[str, str] = {
     "orchestrator": PROFILE_NAME_REASONING,
     "reviewer": PROFILE_NAME_REASONING,
+    "synthesizer": PROFILE_NAME_REASONING,
     "builder": PROFILE_NAME_FAST,
     "scout": PROFILE_NAME_FAST,
 }
