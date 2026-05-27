@@ -8,7 +8,7 @@ import pytest
 
 from pi_harness.corpus.format import Classification
 from pi_harness.topology.base import (
-    AgentSpec, ModelTier, Role, RunHandle, RunSpec, SyncMode, TopologyMode,
+    AgentSpec, ModelTier, Role, RunHandle, RunSpec, SyncMode, TaskDef, TopologyMode,
 )
 from pi_harness.topology.coordinator import Coordinator, DEFAULT_PRIME_TOKEN_BUDGET
 
@@ -295,3 +295,116 @@ class TestCoordinatorPrimeCall:
         # basic_spec has no session_id set
         handle = coord.launch(basic_spec)
         assert handle.session_id is None
+
+
+class TestCoordinatorExplicitTasks:
+    """RunSpec.tasks lets a caller (Plan 7's decomposer) supply the ClawTeam task
+    DAG verbatim instead of having the topology generate one-task-per-agent.
+
+    These tests build REAL RunSpec/AgentSpec/TaskDef objects — only the ClawTeam
+    client is a spy — so the explicit-DAG path is verified against the actual
+    Coordinator contract, not a mock that would accept any shape.
+    """
+
+    def _spec(self, *, tasks, mode=TopologyMode.SEQUENTIAL, session_id=None):
+        return RunSpec(
+            goal="explicit goal",
+            agents=[
+                AgentSpec(name="t-scout", role=Role.SCOUT, model_tier=ModelTier.FAST),
+                AgentSpec(name="t-build", role=Role.BUILDER, model_tier=ModelTier.FAST),
+                AgentSpec(name="t-review", role=Role.REVIEWER, model_tier=ModelTier.REASONING),
+            ],
+            mode=mode,
+            sync_mode=SyncMode.PER_AGENT,
+            corpus_classifications=[],
+            session_id=session_id,
+            tasks=tasks,
+        )
+
+    def _subjects(self, coord):
+        return [c.kwargs["subject"] for c in coord._clawteam_client.create_task.call_args_list]
+
+    def test_explicit_tasks_bypass_topology_plan(self, coord):
+        """The caller's task_ids reach create_task verbatim — not the
+        seq-NNN-<agent> ids SequentialTopology.plan would synthesize."""
+        tasks = [
+            TaskDef(task_id="t-scout", agent_name="t-scout", goal="survey", blocked_by=[]),
+            TaskDef(task_id="t-build", agent_name="t-build", goal="implement", blocked_by=["t-scout"]),
+            TaskDef(task_id="t-review", agent_name="t-review", goal="review", blocked_by=["t-build"]),
+        ]
+        coord.launch(self._spec(tasks=tasks))
+        subjects = self._subjects(coord)
+        assert subjects == ["t-scout", "t-build", "t-review"]
+        assert not any(s.startswith("seq-") for s in subjects)
+
+    def test_explicit_tasks_created_in_topological_order(self, coord):
+        """Tasks supplied out of dependency order must be created with every
+        dependency preceding its dependent (create_task requires the blocker to
+        exist first)."""
+        # Listed dependent-first to force a reorder.
+        tasks = [
+            TaskDef(task_id="t-review", agent_name="t-review", goal="review", blocked_by=["t-build"]),
+            TaskDef(task_id="t-build", agent_name="t-build", goal="implement", blocked_by=["t-scout"]),
+            TaskDef(task_id="t-scout", agent_name="t-scout", goal="survey", blocked_by=[]),
+        ]
+        coord.launch(self._spec(tasks=tasks))
+        subjects = self._subjects(coord)
+        assert subjects.index("t-scout") < subjects.index("t-build") < subjects.index("t-review")
+
+    def test_explicit_tasks_forward_blocked_by_to_create_task(self, coord):
+        tasks = [
+            TaskDef(task_id="t-scout", agent_name="t-scout", goal="survey", blocked_by=[]),
+            TaskDef(task_id="t-build", agent_name="t-build", goal="implement", blocked_by=["t-scout"]),
+        ]
+        coord.launch(self._spec(tasks=tasks))
+        by_subject = {
+            c.kwargs["subject"]: c.kwargs
+            for c in coord._clawteam_client.create_task.call_args_list
+        }
+        assert by_subject["t-scout"]["blocked_by"] is None  # empty → None
+        assert by_subject["t-build"]["blocked_by"] == ["t-scout"]
+        assert by_subject["t-build"]["owner"] == "t-build"
+        assert by_subject["t-build"]["description"] == "implement"
+
+    def test_explicit_tasks_unknown_agent_raises(self, coord):
+        tasks = [
+            TaskDef(task_id="t-x", agent_name="ghost", goal="g", blocked_by=[]),
+        ]
+        with pytest.raises(ValueError, match="unknown agent"):
+            coord.launch(self._spec(tasks=tasks))
+
+    def test_explicit_tasks_unknown_blocked_by_raises(self, coord):
+        tasks = [
+            TaskDef(task_id="t-build", agent_name="t-build", goal="g", blocked_by=["t-missing"]),
+        ]
+        with pytest.raises(ValueError, match="unknown task"):
+            coord.launch(self._spec(tasks=tasks))
+
+    def test_explicit_tasks_cycle_raises(self, coord):
+        tasks = [
+            TaskDef(task_id="t-scout", agent_name="t-scout", goal="g", blocked_by=["t-build"]),
+            TaskDef(task_id="t-build", agent_name="t-build", goal="g", blocked_by=["t-scout"]),
+        ]
+        with pytest.raises(ValueError, match="cycle"):
+            coord.launch(self._spec(tasks=tasks))
+
+    def test_explicit_tasks_persistent_requires_session(self, coord):
+        """The PERSISTENT session_id invariant holds even on the explicit-DAG
+        path (which never calls PersistentTopology.plan)."""
+        tasks = [TaskDef(task_id="t-build", agent_name="t-build", goal="g", blocked_by=[])]
+        with pytest.raises(ValueError, match="session_id"):
+            coord.launch(self._spec(tasks=tasks, mode=TopologyMode.PERSISTENT, session_id=None))
+
+    def test_explicit_tasks_persistent_ok_with_session(self, coord):
+        tasks = [TaskDef(task_id="t-build", agent_name="t-build", goal="g", blocked_by=[])]
+        handle = coord.launch(
+            self._spec(tasks=tasks, mode=TopologyMode.PERSISTENT, session_id="sess-x")
+        )
+        assert handle.session_id == "sess-x"
+        assert self._subjects(coord) == ["t-build"]
+
+    def test_empty_explicit_tasks_seeds_nothing(self, coord):
+        """An explicit empty list is honored as 'no tasks' (distinct from None,
+        which would fall back to topology.plan)."""
+        coord.launch(self._spec(tasks=[]))
+        assert coord._clawteam_client.create_task.call_count == 0
