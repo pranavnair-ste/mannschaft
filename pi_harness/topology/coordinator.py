@@ -24,6 +24,7 @@ from pi_harness.topology.base import (
     RunResult,
     RunSpec,
     SyncMode,
+    TaskDef,
     Topology,
     TopologyMode,
 )
@@ -103,7 +104,12 @@ class Coordinator:
         )
 
         # 2. Build task DAG (TaskDef list — separate from the template).
-        tasks = topology.plan(spec)
+        #    An explicit caller-supplied DAG (e.g. Plan 7's decomposer) is used
+        #    verbatim; otherwise the topology synthesizes one task per agent.
+        if spec.tasks is not None:
+            tasks = self._prepare_explicit_tasks(spec)
+        else:
+            tasks = topology.plan(spec)
 
         # 3. Build the template dict + apply sync_mode.
         template_dict = topology.build_template_dict(spec)
@@ -198,3 +204,66 @@ class Coordinator:
             leader["profile"] = sync_profile
         for agent in template.get("agents", []):
             agent["profile"] = sync_profile
+
+    def _prepare_explicit_tasks(self, spec: RunSpec) -> list[TaskDef]:
+        """Validate + topologically order a caller-supplied task DAG.
+
+        Enforces the same invariants topology.plan() would: PERSISTENT runs
+        still need a session_id, every task is owned by a declared agent, and
+        every blocked_by edge references a real task in the same DAG. Returns
+        the tasks ordered so each blocker precedes its dependents — create_task
+        requires the blocker to exist before the dependent is created.
+        """
+        tasks = spec.tasks or []
+        if spec.mode == TopologyMode.PERSISTENT and not spec.session_id:
+            raise ValueError(
+                "PERSISTENT mode requires RunSpec.session_id even when tasks "
+                "are supplied explicitly"
+            )
+        agent_names = {a.name for a in spec.agents}
+        seen: set[str] = set()
+        for t in tasks:
+            if t.task_id in seen:
+                raise ValueError(
+                    f"explicit RunSpec.tasks has duplicate task_id {t.task_id!r}"
+                )
+            seen.add(t.task_id)
+            if t.agent_name not in agent_names:
+                raise ValueError(
+                    f"task {t.task_id!r} is owned by unknown agent "
+                    f"{t.agent_name!r}; declared agents are {sorted(agent_names)}"
+                )
+        for t in tasks:
+            for dep in t.blocked_by:
+                if dep not in seen:
+                    raise ValueError(
+                        f"task {t.task_id!r} is blocked_by unknown task {dep!r}"
+                    )
+        return self._toposort(tasks)
+
+    @staticmethod
+    def _toposort(tasks: list[TaskDef]) -> list[TaskDef]:
+        """Kahn's algorithm. Preserves input order among ready nodes for
+        determinism; raises ValueError on a dependency cycle."""
+        from collections import deque
+
+        by_id = {t.task_id: t for t in tasks}
+        indegree = {t.task_id: len(t.blocked_by) for t in tasks}
+        dependents: dict[str, list[str]] = {t.task_id: [] for t in tasks}
+        for t in tasks:
+            for dep in t.blocked_by:
+                dependents[dep].append(t.task_id)
+        ready = deque(t.task_id for t in tasks if indegree[t.task_id] == 0)
+        ordered: list[TaskDef] = []
+        while ready:
+            tid = ready.popleft()
+            ordered.append(by_id[tid])
+            for nxt in dependents[tid]:
+                indegree[nxt] -= 1
+                if indegree[nxt] == 0:
+                    ready.append(nxt)
+        if len(ordered) != len(tasks):
+            raise ValueError(
+                "explicit RunSpec.tasks contains a dependency cycle"
+            )
+        return ordered

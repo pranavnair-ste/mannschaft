@@ -67,6 +67,10 @@ class RunSpec:
     session_id: str | None = None              # required for PERSISTENT mode
     executor: str = "pi"                       # `pi` (pi-coding-agent) or `codex`; chosen by caller
     sync_profile: str | None = None            # overrides PROFILE_NAME_FAST when sync_mode = SYNC_ALL
+    tasks: list[TaskDef] | None = None         # explicit ClawTeam DAG (e.g. Plan 7's
+    #   decomposer). When None, Coordinator falls back to topology.plan(spec) to
+    #   synthesize one task per agent. When provided, the Coordinator seeds these
+    #   verbatim (validated + topologically ordered) instead.
 
 
 @dataclass
