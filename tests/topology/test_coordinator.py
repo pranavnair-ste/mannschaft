@@ -462,6 +462,46 @@ class TestCoordinatorExplicitTasks:
         assert coord._clawteam_client.create_task.call_count == 0
 
 
+class TestCoordinatorRunRegistry:
+    def test_launch_registers_run(self, coord, basic_spec):
+        from pi_harness.trajectory.runs import get_run
+        from pi_harness.topology.runspec_codec import runspec_from_json
+
+        handle = coord.launch(basic_spec)
+        row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
+        assert row is not None
+        assert row["status"] == "running"
+        assert row["topology"] == "sequential"
+        assert row["team_name"] == handle.team_name
+        assert row["run_spec_json"]  # non-empty serialized RunSpec
+        restored = runspec_from_json(row["run_spec_json"])
+        assert restored.goal == basic_spec.goal
+        assert restored.mode == basic_spec.mode
+        assert {a.name for a in restored.agents} == {"a", "b"}
+
+    def test_wait_for_completion_marks_succeeded(self, coord, basic_spec):
+        from pi_harness.trajectory.runs import get_run
+
+        handle = coord.launch(basic_spec)
+        coord._clawteam_client.wait_for_completion.return_value = True
+        coord._clawteam_client.list_tasks.return_value = [{"id": "t1", "status": "completed"}]
+        coord.wait_for_completion(handle, timeout=60)
+        row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
+        assert row["status"] == "succeeded"
+        assert row["ended_at"] is not None
+
+    def test_wait_for_completion_marks_failed_on_timeout(self, coord, basic_spec):
+        from pi_harness.clawteam import ClawTeamTimeout
+        from pi_harness.trajectory.runs import get_run
+
+        handle = coord.launch(basic_spec)
+        coord._clawteam_client.wait_for_completion.side_effect = ClawTeamTimeout("nope")
+        coord._clawteam_client.list_tasks.return_value = []
+        coord.wait_for_completion(handle, timeout=60)
+        row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
+        assert row["status"] == "failed"
+
+
 class TestCoordinatorTrajectoryCapture:
     def test_launch_initializes_trajectory_db(self, coord, basic_spec):
         coord.launch(basic_spec)

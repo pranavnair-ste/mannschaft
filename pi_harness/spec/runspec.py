@@ -84,6 +84,7 @@ def spec_to_runspec(
         executor=executor if executor is not None else spec.executor,
         sync_profile=sync_profile if sync_profile is not None else spec.sync_profile,
         tasks=task_defs,
+        spec_id=spec.id,
     )
 
 

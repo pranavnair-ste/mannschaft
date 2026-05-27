@@ -161,6 +161,25 @@ class Coordinator:
             session_id=spec.session_id,
         )
         self._task_specs[run_id] = tasks
+
+        # Register the run so the dashboard can list it with real status /
+        # topology / lineage, and so branch can reload this RunSpec verbatim.
+        from pi_harness.topology.runspec_codec import runspec_to_json
+        from pi_harness.trajectory.runs import register_run
+
+        register_run(
+            run_id=run_id,
+            spec_id=spec.spec_id,
+            topology=spec.mode.value,
+            sync_mode=spec.sync_mode.value,
+            session_id=spec.session_id,
+            goal=spec.goal,
+            team_name=team_name,
+            started_at=handle.started_at,
+            run_spec_json=runspec_to_json(spec),
+            status="running",
+            db_path=self._config.trajectory_db_path,
+        )
         return handle
 
     def wait_for_completion(self, handle: RunHandle, timeout: float) -> RunResult:
@@ -211,6 +230,16 @@ class Coordinator:
             error=error,
         )
         self._last_result[handle.run_id] = result
+
+        # Reflect terminal status in the run registry for the dashboard.
+        from pi_harness.trajectory.runs import mark_run_status
+
+        mark_run_status(
+            handle.run_id,
+            "succeeded" if success else "failed",
+            ended_at=datetime.now(timezone.utc),
+            db_path=self._config.trajectory_db_path,
+        )
         return result
 
     def on_completion(self, handle: RunHandle) -> None:
