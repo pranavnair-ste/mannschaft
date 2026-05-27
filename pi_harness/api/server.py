@@ -60,9 +60,11 @@ def create_app(config: Config, dash: DashboardConfig | None = None) -> FastAPI:
     app.include_router(runs_router)
 
     from pi_harness.api.routes.corpus import router as corpus_router
+    from pi_harness.api.routes.guards import router as guards_router
 
     app.include_router(corpus_router)
-    # guards / ws routers are added in later tasks.
+    app.include_router(guards_router)
+    # ws router added in a later task.
     return app
 
 

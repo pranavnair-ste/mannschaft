@@ -101,3 +101,13 @@ class CorpusHealthDTO(BaseModel):
     prune_candidates: dict[str, int]
     stale_entries: list[CorpusEntryDTO]
     recently_archived: list[CorpusEntryDTO]
+
+
+class PromotionCandidateDTO(BaseModel):
+    sensor_name: str
+    sensor_criterion: str
+    fires: int
+    allow_fraction: float
+    suggested_kind: str
+    suggested_stub_code: str
+    evidence: dict[str, Any] = Field(default_factory=dict)
