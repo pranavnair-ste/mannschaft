@@ -7,6 +7,7 @@ via client.create_task, and schedules a post-completion improve run.
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import tomli_w
@@ -17,7 +18,7 @@ from pi_harness.clawteam import (
     ClawTeamRunFailure,
     ClawTeamTimeout,
 )
-from pi_harness.clawteam_profile import PROFILE_NAME_FAST
+from pi_harness.clawteam_profile import PROFILE_NAME_FAST, build_profile_specs
 from pi_harness.topology.base import (
     DEFAULT_PRIME_TOKEN_BUDGET,
     RunHandle,
@@ -120,6 +121,12 @@ class Coordinator:
         template_name = f"topology-{spec.mode.value}-{run_id[-8:]}"
         team_name = f"team-{run_id[-8:]}"
         template_dict["template"]["name"] = template_name
+
+        # 4b. Register the profiles the template references (idempotent upsert).
+        #     --command carries the chosen executor so `pi` vs `codex` is honored;
+        #     ClawTeam's --agent only accepts claude/codex/gemini/kimi/nanobot.
+        for pspec in build_profile_specs(self._config):
+            self._clawteam_client.register_profile(replace(pspec, command=spec.executor))
 
         # 5. Register template + launch team via Plan 1.
         self._clawteam_client.install_template(

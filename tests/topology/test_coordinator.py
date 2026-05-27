@@ -95,6 +95,19 @@ class TestCoordinatorLaunch:
         with pytest.raises(ValueError):
             coord.launch(spec)
 
+    def test_launch_registers_both_profiles_with_executor(self, coord, basic_spec):
+        """A fresh-launch must register both pi-openai profiles (idempotent
+        upsert) before the team launches, with --command set to the executor."""
+        coord.launch(basic_spec)
+        client = coord._clawteam_client
+        assert client.register_profile.call_count == 2
+        registered = [c.args[0] for c in client.register_profile.call_args_list]
+        assert {p.name for p in registered} == {"pi-openai-reasoning", "pi-openai-fast"}
+        assert all(p.command == basic_spec.executor for p in registered)
+        # Profiles must exist before the team launches.
+        names = [c[0] for c in client.mock_calls]
+        assert names.index("register_profile") < names.index("launch_team")
+
 
 class TestCoordinatorSyncMode:
     def test_sync_all_rewrites_all_profiles(self, coord):
