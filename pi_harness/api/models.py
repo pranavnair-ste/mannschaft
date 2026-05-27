@@ -61,3 +61,14 @@ class AgentTimelineRowDTO(BaseModel):
 class TimelineDTO(BaseModel):
     run_id: str
     agents: list[AgentTimelineRowDTO]
+
+
+class BranchRequest(BaseModel):
+    step_id: str
+    overrides: dict[str, Any] = Field(default_factory=dict)
+
+
+class BranchResponse(BaseModel):
+    run_id: str
+    parent_run_id: str
+    branched_from_step: str

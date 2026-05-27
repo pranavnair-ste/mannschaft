@@ -6,12 +6,14 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from pi_harness.api.models import (
     AgentTimelineRowDTO,
+    BranchRequest,
+    BranchResponse,
     RunDetailDTO,
     RunSummaryDTO,
     TimelineDTO,
     TrajectoryEventDTO,
 )
-from pi_harness.trajectory.runs import query_run_summaries
+from pi_harness.trajectory.runs import get_run, query_run_summaries
 from pi_harness.trajectory.store import query_events
 
 router = APIRouter(tags=["runs"])
@@ -61,4 +63,18 @@ def get_timeline(request: Request, run_id: str) -> TimelineDTO:
     return TimelineDTO(
         run_id=run_id,
         agents=[AgentTimelineRowDTO(agent_id=a, events=evs) for a, evs in grouped.items()],
+    )
+
+
+@router.post("/runs/{run_id}/branch", response_model=BranchResponse)
+def branch_run(request: Request, run_id: str, body: BranchRequest) -> BranchResponse:
+    if get_run(run_id, db_path=_db(request)) is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    coord = request.app.state.coordinator_factory(request.app.state.config)
+    try:
+        handle = coord.branch(run_id, body.step_id, body.overrides)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return BranchResponse(
+        run_id=handle.run_id, parent_run_id=run_id, branched_from_step=body.step_id
     )
