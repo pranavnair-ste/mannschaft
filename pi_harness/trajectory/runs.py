@@ -135,6 +135,24 @@ def mark_run_status(
         conn.commit()
 
 
+def _event_cost_preferring_self_reported(row: sqlite3.Row) -> float:
+    """Use pi's own ``cost_usd`` from the event's output if present, else fall
+    back to ``cost.event_cost``. The wrapper records pi's per-turn cost in
+    ``output['cost_usd']``; trusting that avoids drift from our model price
+    table (e.g. gpt-5.4-mini is in pi's defaults but not MODEL_PRICES).
+    """
+    raw_output = row["output"]
+    if raw_output:
+        try:
+            output = json.loads(raw_output)
+            self_reported = output.get("cost_usd")
+            if isinstance(self_reported, (int, float)) and self_reported > 0:
+                return float(self_reported)
+        except (json.JSONDecodeError, AttributeError):
+            pass
+    return event_cost(row["model"], row["tokens_in"], row["tokens_out"])
+
+
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     if d.get("overrides"):
@@ -189,12 +207,10 @@ def query_run_summaries(
                 (r["run_id"],),
             ).fetchone()
             ev_rows = conn.execute(
-                "SELECT model, tokens_in, tokens_out FROM trajectory_events WHERE run_id = ?",
+                "SELECT model, tokens_in, tokens_out, output FROM trajectory_events WHERE run_id = ?",
                 (r["run_id"],),
             ).fetchall()
-            cost = sum(
-                event_cost(e["model"], e["tokens_in"], e["tokens_out"]) for e in ev_rows
-            )
+            cost = sum(_event_cost_preferring_self_reported(e) for e in ev_rows)
             out.append(
                 RunSummary(
                     run_id=r["run_id"],

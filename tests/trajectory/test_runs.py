@@ -151,6 +151,35 @@ def test_query_run_summaries_status_filter(db: Path):
     assert {s.run_id for s in running} == {"r-run"}
 
 
+def test_query_run_summaries_prefers_self_reported_cost(db: Path):
+    """When a captured event carries pi's own cost_usd, it's used directly
+    (not re-computed via the model price table). Avoids drift when models
+    aren't in cost.py's MODEL_PRICES."""
+    from pi_harness.trajectory.runs import query_run_summaries
+    from pi_harness.trajectory.schema import TrajectoryEvent
+    from pi_harness.trajectory.store import write_event
+
+    register_run(
+        run_id="r-pi", spec_id=None, topology="adhoc", sync_mode="per_agent",
+        session_id=None, goal="g", team_name="t",
+        started_at=datetime(2026, 5, 28, tzinfo=timezone.utc),
+        run_spec_json="{}", db_path=db,
+    )
+    # A model NOT in MODEL_PRICES; cost.event_cost would return 0 for it.
+    write_event(
+        TrajectoryEvent(
+            run_id="r-pi", agent_id="a", step_id="turn-1",
+            ts=datetime(2026, 5, 28, tzinfo=timezone.utc), model="gpt-5.4-mini",
+            tool="", input={}, output={"cost_usd": 0.0042},
+            duration_ms=0, tokens_in=100, tokens_out=50,
+            outcome="success", classification="message",
+        ),
+        db_path=db,
+    )
+    s = query_run_summaries(db_path=db)[0]
+    assert s.total_cost_usd == pytest.approx(0.0042)
+
+
 def test_run_summary_is_dataclass():
     # sanity: RunSummary constructs with the documented fields
     s = RunSummary(
