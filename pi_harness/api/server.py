@@ -16,20 +16,30 @@ from pi_harness.config import Config, load_config
 from pi_harness.spec.editor import router as spec_router
 
 
+DEFAULT_FRONTEND_ORIGINS: tuple[str, ...] = (
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+)
+
+
 @dataclass(frozen=True)
 class DashboardConfig:
     api_host: str = "127.0.0.1"
     api_port: int = 8800
-    frontend_origin: str = "http://localhost:3000"
+    frontend_origins: tuple[str, ...] = DEFAULT_FRONTEND_ORIGINS
 
 
 def load_dashboard_config() -> DashboardConfig:
+    raw = os.environ.get("PI_HARNESS_FRONTEND_ORIGIN")
+    origins: tuple[str, ...] = (
+        tuple(o.strip() for o in raw.split(",") if o.strip())
+        if raw
+        else DEFAULT_FRONTEND_ORIGINS
+    )
     return DashboardConfig(
         api_host=os.environ.get("PI_HARNESS_API_HOST", "127.0.0.1"),
         api_port=int(os.environ.get("PI_HARNESS_API_PORT", "8800")),
-        frontend_origin=os.environ.get(
-            "PI_HARNESS_FRONTEND_ORIGIN", "http://localhost:3000"
-        ),
+        frontend_origins=origins,
     )
 
 
@@ -40,7 +50,7 @@ def create_app(config: Config, dash: DashboardConfig | None = None) -> FastAPI:
     app.state.dashboard_config = dash
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[dash.frontend_origin],
+        allow_origins=list(dash.frontend_origins),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
