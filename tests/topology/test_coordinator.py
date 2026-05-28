@@ -154,6 +154,50 @@ class TestCoordinatorSyncMode:
         for a in parsed["template"]["agents"]:
             assert a["profile"] == ROLE_PROFILE_MAP[a["type"]]
 
+    def test_per_agent_command_carries_bucket_flag(self, coord):
+        """Each agent's command must end with --bucket <reasoning|fast> so
+        agent_wrapper can pick the right provider/model from HarnessSettings.
+        Without this, every pi agent falls back to its own settings.json
+        default (currently gpt-5.4-mini) regardless of what the user picked."""
+        from pi_harness.topology.base import (
+            AgentSpec,
+            ModelTier,
+            Role,
+            RunSpec,
+            SyncMode,
+            TopologyMode,
+        )
+
+        spec = RunSpec(
+            goal="g",
+            agents=[
+                AgentSpec(name="lead", role=Role.ORCHESTRATOR, model_tier=ModelTier.REASONING),
+                AgentSpec(name="b1", role=Role.BUILDER, model_tier=ModelTier.FAST),
+                AgentSpec(name="rev", role=Role.REVIEWER, model_tier=ModelTier.REASONING),
+                AgentSpec(name="sc", role=Role.SCOUT, model_tier=ModelTier.FAST),
+            ],
+            mode=TopologyMode.SEQUENTIAL,
+            sync_mode=SyncMode.PER_AGENT,
+            corpus_classifications=[],
+        )
+        coord.launch(spec)
+        install_call = coord._clawteam_client.install_template.call_args
+        import tomllib
+        template_toml = install_call.args[1] if len(install_call.args) > 1 else install_call.kwargs["toml_text"]
+        parsed = tomllib.loads(template_toml)
+
+        expected_bucket = {
+            "orchestrator": "reasoning",
+            "reviewer": "reasoning",
+            "synthesizer": "reasoning",
+            "builder": "fast",
+            "scout": "fast",
+        }
+        leader = parsed["template"]["leader"]
+        assert leader["command"][-2:] == ["--bucket", expected_bucket[leader["type"]]]
+        for a in parsed["template"]["agents"]:
+            assert a["command"][-2:] == ["--bucket", expected_bucket[a["type"]]]
+
 
 class TestCoordinatorWaitAndImprove:
     def test_wait_for_completion_returns_run_result_on_success(self, coord, basic_spec):

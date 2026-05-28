@@ -32,6 +32,9 @@ __all__ = [
     "build_profile_specs",
     "generate_pi_openai_profile",
     "write_pi_openai_profile",
+    "BUCKET_REASONING",
+    "BUCKET_FAST",
+    "bucket_for_role",
 ]
 
 PROFILE_NAME_REASONING = "pi-openai-reasoning"
@@ -46,6 +49,25 @@ ROLE_PROFILE_MAP: Dict[str, str] = {
     "builder": PROFILE_NAME_FAST,
     "scout": PROFILE_NAME_FAST,
 }
+
+# Bucket names used as the agent_wrapper --bucket value. These are the
+# HarnessSettings keys (orchestrator-bucket vs builder-bucket); two names
+# instead of five so the UI stays at "pick a model for the orchestrator,
+# pick a model for the builder."
+BUCKET_REASONING = "reasoning"
+BUCKET_FAST = "fast"
+
+_PROFILE_TO_BUCKET = {
+    PROFILE_NAME_REASONING: BUCKET_REASONING,
+    PROFILE_NAME_FAST: BUCKET_FAST,
+}
+
+
+def bucket_for_role(role: str) -> str:
+    """Map a role string to its HarnessSettings bucket. Unknown roles fall
+    back to the fast bucket (cheap default, matches builder/scout)."""
+    profile = ROLE_PROFILE_MAP.get(role, PROFILE_NAME_FAST)
+    return _PROFILE_TO_BUCKET.get(profile, BUCKET_FAST)
 
 
 @dataclass(frozen=True)

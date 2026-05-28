@@ -147,6 +147,17 @@ class Coordinator:
         template_dict["template"]["command"] = list(wrapper_argv)
         wrapper_cmd_str = " ".join(shlex.quote(p) for p in wrapper_argv)
 
+        # Per-agent commands carry the agent's bucket so agent_wrapper can pick
+        # the right HarnessSettings entry (orchestrator vs builder) for
+        # --provider/--model on pi. Without this, every pi pane uses pi's
+        # built-in settings.json defaults regardless of the UI selection.
+        from pi_harness.clawteam_profile import bucket_for_role
+
+        leader_block = template_dict["template"]["leader"]
+        leader_block["command"] = list(wrapper_argv) + ["--bucket", bucket_for_role(leader_block["type"])]
+        for agent_block in template_dict["template"]["agents"]:
+            agent_block["command"] = list(wrapper_argv) + ["--bucket", bucket_for_role(agent_block["type"])]
+
         # 4b. Register the profiles the template references (idempotent upsert).
         for pspec in build_profile_specs(self._config):
             self._clawteam_client.register_profile(

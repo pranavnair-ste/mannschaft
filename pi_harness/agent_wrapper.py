@@ -29,10 +29,47 @@ from pi_harness.trajectory.agent_capture import PiEventParser
 from pi_harness.trajectory.store import init_db, write_event
 
 
-def _build_argv(executor: str, prompt_args: list[str]) -> list[str]:
+LOCAL_PROVIDER_NAME = "harness-local"
+
+
+def _resolve_provider_model(bucket: str) -> tuple[str, str]:
+    """Translate a bucket name into a (pi provider, pi model) pair.
+
+    Buckets line up with ROLE_PROFILE_MAP / ModelTier:
+        "reasoning" → orchestrator-bucket (orchestrator/reviewer/synthesizer roles)
+        "fast"      → builder-bucket (builder/scout roles)
+
+    The pi provider is either "openai" (built into pi) or LOCAL_PROVIDER_NAME
+    (registered by the settings API into ~/.pi/agent/models.json when the
+    user picks Local). The model string is whatever the user saved.
+    """
+    from pi_harness.settings import load_settings
+
+    settings = load_settings()
+    if bucket == "reasoning":
+        cfg = settings.orchestrator
+    elif bucket == "fast":
+        cfg = settings.builder
+    else:
+        raise ValueError(f"unknown bucket {bucket!r}; expected 'reasoning' or 'fast'")
+
+    if cfg.provider == "api":
+        return ("openai", cfg.model)
+    if cfg.provider == "local":
+        return (LOCAL_PROVIDER_NAME, cfg.model)
+    raise ValueError(f"unknown provider {cfg.provider!r} on bucket {bucket!r}")
+
+
+def _build_argv(
+    executor: str,
+    prompt_args: list[str],
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+) -> list[str]:
     if executor == "pi":
         # Flags verified against pi 0.73.1 (see CAPTURE_FORMAT.md).
-        return [
+        argv = [
             "pi",
             "--print",
             "--mode",
@@ -41,8 +78,13 @@ def _build_argv(executor: str, prompt_args: list[str]) -> list[str]:
             "--no-context-files",
             "--no-extensions",
             "--no-skills",
-            *prompt_args,
         ]
+        if provider is not None:
+            argv.extend(["--provider", provider])
+        if model is not None:
+            argv.extend(["--model", model])
+        argv.extend(prompt_args)
+        return argv
     if executor == "codex":
         # codex 0.134.0 CLI flags are not yet verified; pass through verbatim
         # until a codex-mode capture spike confirms the shape.
@@ -88,9 +130,19 @@ def run(
     db_path: Path | str | None,
     prompt_args: list[str],
     tee_stdout: bool = True,
+    bucket: str | None = None,
 ) -> int:
-    """Spawn the executor, capture its stream, return its exit code."""
-    argv = _build_argv(executor, prompt_args)
+    """Spawn the executor, capture its stream, return its exit code.
+
+    When ``bucket`` is set (``reasoning`` or ``fast``), HarnessSettings is
+    consulted to choose pi's --provider/--model. When None, pi falls back to
+    its own settings.json defaults — current legacy behavior.
+    """
+    provider: str | None = None
+    model: str | None = None
+    if bucket is not None and executor == "pi":
+        provider, model = _resolve_provider_model(bucket)
+    argv = _build_argv(executor, prompt_args, provider=provider, model=model)
     proc = subprocess.Popen(
         argv,
         stdin=subprocess.DEVNULL,  # critical: pi hangs without this
@@ -133,6 +185,16 @@ def main(argv: list[str] | None = None) -> int:
         "-p", "--prompt",
         help="The agent prompt (ClawTeam's adapter passes this via -p)",
     )
+    ap.add_argument(
+        "--bucket",
+        choices=["reasoning", "fast"],
+        default=None,
+        help=(
+            "Agent's bucket; selects which HarnessSettings entry "
+            "(orchestrator/builder) drives --provider/--model on pi. "
+            "Stamped by Coordinator per-agent based on ROLE_PROFILE_MAP."
+        ),
+    )
     # Anything else (unknown flags, trailing positionals) is forwarded to the
     # executor verbatim so callers can pass executor-specific flags.
     args, extras = ap.parse_known_args(argv)
@@ -159,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_id=args.agent_id,
         db_path=db_path,
         prompt_args=prompt_args,
+        bucket=args.bucket,
     )
 
 

@@ -18,6 +18,7 @@ export type LintResult = S["LintResult"];
 export type DecomposeResponse = S["DecomposeResponse"];
 export type LaunchResponse = S["LaunchResponse"];
 export type UpdateSpecBody = S["UpdateSpecBody"];
+export type ModelSettings = S["SettingsBody"];
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8800";
 
@@ -65,4 +66,12 @@ export const api = {
   decomposeSpec: (id: string) =>
     json<DecomposeResponse>(`/specs/${id}/decompose`, { method: "POST" }),
   launchSpec: (id: string) => json<LaunchResponse>(`/specs/${id}/launch`, { method: "POST" }),
+  // Model picker (orchestrator/builder bucket selection)
+  getModelSettings: () => json<ModelSettings>("/settings/models"),
+  putModelSettings: (body: ModelSettings) =>
+    json<ModelSettings>("/settings/models", { method: "PUT", body: JSON.stringify(body) }),
+  discoverLocalModels: (baseUrl: string) =>
+    json<{ models: string[]; error?: string }>(
+      `/settings/models/local-models?base_url=${encodeURIComponent(baseUrl)}`,
+    ),
 };
