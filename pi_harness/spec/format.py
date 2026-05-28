@@ -52,6 +52,11 @@ class Spec:
     sync_profile: str | None = None
     session_id: str | None = None
     corpus_classifications: list[str] = field(default_factory=list)
+    # Persisted output of POST /specs/{id}/decompose. None means "not
+    # decomposed yet (or content changed since)" — /launch falls back to a
+    # live decomposer call. Stored as plain dicts so YAML round-trips cleanly
+    # and DecomposedTask stays owned by pi_harness.spec.decomposer.
+    decomposed_tasks: list[dict] | None = None
 
 
 def _home_dir() -> Path:
@@ -115,6 +120,7 @@ def parse_spec(path: Path) -> Spec:
     for key, default in _RUN_SHAPE_DEFAULTS.items():
         data.setdefault(key, default)
     data.setdefault("corpus_classifications", [])
+    data.setdefault("decomposed_tasks", None)
     # Drop any unknown keys (e.g. a stray `agents:` block from an older scaffold)
     # so the dataclass constructor doesn't choke.
     allowed = set(Spec.__dataclass_fields__)

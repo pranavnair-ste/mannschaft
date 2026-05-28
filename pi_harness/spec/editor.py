@@ -159,12 +159,24 @@ def create_spec(body: CreateSpecBody) -> Spec:
     return spec
 
 
+# Fields the decomposer reads when generating tasks; changing any of these
+# invalidates the persisted decomposition and the linter score.
+_DECOMPOSER_INPUT_FIELDS = frozenset(
+    {"title", "goal", "acceptance_criteria", "constraints", "non_goals"}
+)
+
+
 @router.put("/specs/{spec_id}", response_model=Spec)
 def update_spec(spec_id: str, body: UpdateSpecBody) -> Spec:
     spec = _load(spec_id)
+    patch = body.model_dump(exclude_unset=True)
     data = spec.__dict__.copy()
-    data.update(body.model_dump(exclude_unset=True))
+    data.update(patch)
     data["updated_at"] = _now()
+    if _DECOMPOSER_INPUT_FIELDS & patch.keys():
+        data["status"] = "draft"
+        data["linter_score"] = None
+        data["decomposed_tasks"] = None
     updated = Spec(**data)
     serialize_spec(updated, spec_path(spec_id))
     return updated
@@ -180,7 +192,9 @@ def lint_spec(spec_id: str) -> LintResult:
     data = spec.__dict__.copy()
     data["linter_score"] = result.score
     data["updated_at"] = _now()
-    if not result.errors:
+    # Lint promotes draft → linted, but never demotes a decomposed/running
+    # spec — only an edit (PUT) invalidates the decomposition.
+    if not result.errors and data["status"] == "draft":
         data["status"] = "linted"
     serialize_spec(Spec(**data), spec_path(spec_id))
     return result
@@ -205,6 +219,7 @@ def decompose_spec(spec_id: str, decomposer=Depends(get_decomposer)) -> Decompos
     data = spec.__dict__.copy()
     data["status"] = "decomposed"
     data["updated_at"] = _now()
+    data["decomposed_tasks"] = [t.model_dump() for t in tasks]
     serialize_spec(Spec(**data), spec_path(spec_id))
     return DecomposeResponse(tasks=tasks)
 
@@ -224,8 +239,12 @@ def launch_spec(
                 "POST /specs/{id}/decompose first."
             ),
         )
-    # Tasks aren't persisted on the spec, so re-derive them for the launch.
-    tasks = decomposer.decompose(spec)
+    if spec.decomposed_tasks is not None:
+        tasks = [DecomposedTask(**t) for t in spec.decomposed_tasks]
+    else:
+        # Legacy specs decomposed before the persistence change have status
+        # "decomposed" but no stored tasks; fall back to a live decomposer call.
+        tasks = decomposer.decompose(spec)
     run_spec = spec_to_runspec(spec, tasks)
     handle = coordinator.launch(run_spec)
 
