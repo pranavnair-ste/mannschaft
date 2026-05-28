@@ -6,6 +6,7 @@ via client.create_task, and schedules a post-completion improve run.
 """
 from __future__ import annotations
 
+import sys
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -126,11 +127,31 @@ class Coordinator:
         team_name = f"team-{run_id[-8:]}"
         template_dict["template"]["name"] = template_name
 
+        # Route every agent's command through the pi_harness wrapper so its
+        # NDJSON event stream lands in the trajectory store. ClawTeam's launch
+        # uses the template's top-level ``command`` unless a top-level
+        # ``--profile`` is passed; we set BOTH (template AND profile.command)
+        # as defense-in-depth. agent_id is picked up from CLAWTEAM_AGENT_NAME
+        # (set by ClawTeam in each pane).
+        import shlex
+
+        wrapper_argv = [
+            sys.executable,
+            "-m",
+            "pi_harness.agent_wrapper",
+            "--executor",
+            spec.executor,
+            "--run-id",
+            run_id,
+        ]
+        template_dict["template"]["command"] = list(wrapper_argv)
+        wrapper_cmd_str = " ".join(shlex.quote(p) for p in wrapper_argv)
+
         # 4b. Register the profiles the template references (idempotent upsert).
-        #     --command carries the chosen executor so `pi` vs `codex` is honored;
-        #     ClawTeam's --agent only accepts claude/codex/gemini/kimi/nanobot.
         for pspec in build_profile_specs(self._config):
-            self._clawteam_client.register_profile(replace(pspec, command=spec.executor))
+            self._clawteam_client.register_profile(
+                replace(pspec, command=wrapper_cmd_str)
+            )
 
         # 5. Register template + launch team via Plan 1.
         self._clawteam_client.install_template(
@@ -161,6 +182,76 @@ class Coordinator:
             session_id=spec.session_id,
         )
         self._task_specs[run_id] = tasks
+
+        # Register the run so the dashboard can list it with real status /
+        # topology / lineage, and so branch can reload this RunSpec verbatim.
+        from pi_harness.topology.runspec_codec import runspec_to_json
+        from pi_harness.trajectory.runs import register_run
+
+        register_run(
+            run_id=run_id,
+            spec_id=spec.spec_id,
+            topology=spec.mode.value,
+            sync_mode=spec.sync_mode.value,
+            session_id=spec.session_id,
+            goal=spec.goal,
+            team_name=team_name,
+            started_at=handle.started_at,
+            run_spec_json=runspec_to_json(spec),
+            status="running",
+            db_path=self._config.trajectory_db_path,
+        )
+        return handle
+
+    def branch(
+        self,
+        parent_run_id: str,
+        step_id: str,
+        overrides: dict | None = None,
+    ) -> RunHandle:
+        """Level-1 branch: reload the parent's RunSpec, apply overrides, launch a
+        child tagged with lineage.
+
+        This is NOT mid-run replay — it re-runs the work from the parent's spec
+        with a tweak (model_tier/topology/sync_mode/goal). The parent run must
+        have been registered with a stored RunSpec.
+        """
+        from pi_harness.topology.runspec_codec import (
+            apply_overrides,
+            runspec_from_json,
+            runspec_to_json,
+        )
+        from pi_harness.trajectory.runs import get_run, register_run
+
+        parent = get_run(parent_run_id, db_path=self._config.trajectory_db_path)
+        if parent is None:
+            raise ValueError(f"unknown parent run {parent_run_id!r}")
+        if not parent.get("run_spec_json"):
+            raise ValueError("cannot branch: parent has no stored RunSpec")
+
+        spec = runspec_from_json(parent["run_spec_json"])
+        if overrides:
+            spec = apply_overrides(spec, overrides)
+
+        handle = self.launch(spec)  # registers the child as running
+
+        # Re-register to stamp lineage onto the freshly-created child row.
+        register_run(
+            run_id=handle.run_id,
+            spec_id=spec.spec_id,
+            topology=spec.mode.value,
+            sync_mode=spec.sync_mode.value,
+            session_id=spec.session_id,
+            goal=spec.goal,
+            team_name=handle.team_name,
+            started_at=handle.started_at,
+            run_spec_json=runspec_to_json(spec),
+            status="running",
+            parent_run_id=parent_run_id,
+            branch_from_step=step_id,
+            overrides=overrides or {},
+            db_path=self._config.trajectory_db_path,
+        )
         return handle
 
     def wait_for_completion(self, handle: RunHandle, timeout: float) -> RunResult:
@@ -211,6 +302,16 @@ class Coordinator:
             error=error,
         )
         self._last_result[handle.run_id] = result
+
+        # Reflect terminal status in the run registry for the dashboard.
+        from pi_harness.trajectory.runs import mark_run_status
+
+        mark_run_status(
+            handle.run_id,
+            "succeeded" if success else "failed",
+            ended_at=datetime.now(timezone.utc),
+            db_path=self._config.trajectory_db_path,
+        )
         return result
 
     def on_completion(self, handle: RunHandle) -> None:

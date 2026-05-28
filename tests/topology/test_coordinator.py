@@ -98,15 +98,19 @@ class TestCoordinatorLaunch:
         with pytest.raises(ValueError):
             coord.launch(spec)
 
-    def test_launch_registers_both_profiles_with_executor(self, coord, basic_spec):
+    def test_launch_registers_both_profiles_with_wrapper(self, coord, basic_spec):
         """A fresh-launch must register both pi-openai profiles (idempotent
-        upsert) before the team launches, with --command set to the executor."""
+        upsert) before the team launches, with profile.command routing through
+        pi_harness.agent_wrapper so every agent's NDJSON stream is captured."""
         coord.launch(basic_spec)
         client = coord._clawteam_client
         assert client.register_profile.call_count == 2
         registered = [c.args[0] for c in client.register_profile.call_args_list]
         assert {p.name for p in registered} == {"pi-openai-reasoning", "pi-openai-fast"}
-        assert all(p.command == basic_spec.executor for p in registered)
+        for p in registered:
+            assert "pi_harness.agent_wrapper" in p.command
+            assert f"--executor {basic_spec.executor}" in p.command
+            assert "--run-id" in p.command
         # Profiles must exist before the team launches.
         names = [c[0] for c in client.mock_calls]
         assert names.index("register_profile") < names.index("launch_team")
@@ -460,6 +464,116 @@ class TestCoordinatorExplicitTasks:
         which would fall back to topology.plan)."""
         coord.launch(self._spec(tasks=[]))
         assert coord._clawteam_client.create_task.call_count == 0
+
+
+class TestCoordinatorRunRegistry:
+    def test_launch_registers_run(self, coord, basic_spec):
+        from pi_harness.trajectory.runs import get_run
+        from pi_harness.topology.runspec_codec import runspec_from_json
+
+        handle = coord.launch(basic_spec)
+        row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
+        assert row is not None
+        assert row["status"] == "running"
+        assert row["topology"] == "sequential"
+        assert row["team_name"] == handle.team_name
+        assert row["run_spec_json"]  # non-empty serialized RunSpec
+        restored = runspec_from_json(row["run_spec_json"])
+        assert restored.goal == basic_spec.goal
+        assert restored.mode == basic_spec.mode
+        assert {a.name for a in restored.agents} == {"a", "b"}
+
+    def test_wait_for_completion_marks_succeeded(self, coord, basic_spec):
+        from pi_harness.trajectory.runs import get_run
+
+        handle = coord.launch(basic_spec)
+        coord._clawteam_client.wait_for_completion.return_value = True
+        coord._clawteam_client.list_tasks.return_value = [{"id": "t1", "status": "completed"}]
+        coord.wait_for_completion(handle, timeout=60)
+        row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
+        assert row["status"] == "succeeded"
+        assert row["ended_at"] is not None
+
+    def test_wait_for_completion_marks_failed_on_timeout(self, coord, basic_spec):
+        from pi_harness.clawteam import ClawTeamTimeout
+        from pi_harness.trajectory.runs import get_run
+
+        handle = coord.launch(basic_spec)
+        coord._clawteam_client.wait_for_completion.side_effect = ClawTeamTimeout("nope")
+        coord._clawteam_client.list_tasks.return_value = []
+        coord.wait_for_completion(handle, timeout=60)
+        row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
+        assert row["status"] == "failed"
+
+
+class TestCoordinatorBranch:
+    def _register_parent(self, coord, spec, run_id="parent-1", status="succeeded"):
+        from datetime import datetime, timezone
+        from pi_harness.topology.runspec_codec import runspec_to_json
+        from pi_harness.trajectory.runs import register_run
+
+        register_run(
+            run_id=run_id, spec_id=spec.spec_id, topology=spec.mode.value,
+            sync_mode=spec.sync_mode.value, session_id=spec.session_id, goal=spec.goal,
+            team_name="parent-team", started_at=datetime(2026, 5, 28, tzinfo=timezone.utc),
+            run_spec_json=runspec_to_json(spec), status=status,
+            db_path=coord._config.trajectory_db_path,
+        )
+        return run_id
+
+    def test_branch_launches_child_with_lineage(self, coord, basic_spec):
+        from pi_harness.topology.base import RunHandle
+        from pi_harness.trajectory.runs import get_run
+
+        parent = self._register_parent(coord, basic_spec)
+        handle = coord.branch(parent, step_id="s-2", overrides={"model_tier": "reasoning"})
+        assert isinstance(handle, RunHandle)
+        assert handle.run_id != parent
+        assert coord._clawteam_client.launch_team.called
+        row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
+        assert row["parent_run_id"] == parent
+        assert row["branch_from_step"] == "s-2"
+        assert row["overrides"] == {"model_tier": "reasoning"}
+        assert row["status"] == "running"
+
+    def test_branch_applies_override_to_child_runspec(self, coord):
+        from pi_harness.topology.runspec_codec import runspec_from_json
+        from pi_harness.trajectory.runs import get_run
+
+        # parallel needs >=3 agents, so build a 3-agent parent spec
+        three = RunSpec(
+            goal="g",
+            agents=[
+                AgentSpec(name="lead", role=Role.ORCHESTRATOR, model_tier=ModelTier.REASONING),
+                AgentSpec(name="w", role=Role.BUILDER, model_tier=ModelTier.FAST),
+                AgentSpec(name="m", role=Role.REVIEWER, model_tier=ModelTier.REASONING),
+            ],
+            mode=TopologyMode.SEQUENTIAL,
+            sync_mode=SyncMode.PER_AGENT,
+            corpus_classifications=[],
+        )
+        parent = self._register_parent(coord, three, run_id="parent-3")
+        handle = coord.branch(parent, step_id="s-1", overrides={"topology": "parallel"})
+        row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
+        child_spec = runspec_from_json(row["run_spec_json"])
+        assert child_spec.mode.value == "parallel"
+
+    def test_branch_unknown_parent_raises(self, coord):
+        with pytest.raises(ValueError, match="unknown parent run"):
+            coord.branch("ghost", step_id="s-1", overrides={})
+
+    def test_branch_parent_without_runspec_raises(self, coord, basic_spec):
+        from datetime import datetime, timezone
+        from pi_harness.trajectory.runs import register_run
+
+        register_run(
+            run_id="bare", spec_id=None, topology="sequential", sync_mode="per_agent",
+            session_id=None, goal="g", team_name="t",
+            started_at=datetime(2026, 5, 28, tzinfo=timezone.utc), run_spec_json="",
+            db_path=coord._config.trajectory_db_path,
+        )
+        with pytest.raises(ValueError, match="no stored RunSpec"):
+            coord.branch("bare", step_id="s-1", overrides={})
 
 
 class TestCoordinatorTrajectoryCapture:

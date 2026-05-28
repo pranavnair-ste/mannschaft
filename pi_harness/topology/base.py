@@ -71,6 +71,8 @@ class RunSpec:
     #   decomposer). When None, Coordinator falls back to topology.plan(spec) to
     #   synthesize one task per agent. When provided, the Coordinator seeds these
     #   verbatim (validated + topologically ordered) instead.
+    spec_id: str | None = None                 # originating spec id; threaded into the
+    #   run registry for dashboard lineage + branch (Symphony UX). None for ad-hoc runs.
 
 
 @dataclass

@@ -559,3 +559,65 @@ def test_append_update_preserves_session_id(tmp_corpus_root: Path) -> None:
         f"Append clobbered session_id: got {on_disk.session_id!r}, expected 'orig-session'"
     )
     assert "appended fragment" in on_disk.body, "Appended text should be in the body"
+
+
+# ---------------------------------------------------------------------------
+# restore_archived — un-archive an entry back to its active classification dir
+# ---------------------------------------------------------------------------
+
+
+def test_restore_archived_moves_entry_back_to_active(tmp_corpus_root: Path) -> None:
+    from pi_harness.corpus import writer
+    from pi_harness.corpus.curator import (
+        Curator,
+        _classification_dir,
+        _find_archived_entry_path,
+    )
+    from pi_harness.corpus.format import Classification
+
+    cfg = _make_config(tmp_corpus_root)
+    curator = Curator(cfg)
+    curator._ensure_git()
+    entry = _make_entry(classification=Classification.TACTICAL, body="restore me")
+    now = datetime(2026, 5, 28, tzinfo=timezone.utc)
+    with writer.curator_context():
+        writer.archive_entry(entry, tmp_corpus_root, now)
+
+    active_path = _classification_dir(tmp_corpus_root, entry.classification) / f"{entry.id}.md"
+    assert _find_archived_entry_path(tmp_corpus_root, entry.id) is not None
+    assert not active_path.exists()
+
+    restored = curator.restore_archived(entry.id)
+
+    assert restored.id == entry.id
+    assert restored.classification == Classification.TACTICAL
+    assert active_path.exists()
+    assert _find_archived_entry_path(tmp_corpus_root, entry.id) is None
+
+
+def test_restore_archived_commits(tmp_corpus_root: Path) -> None:
+    from pi_harness.corpus import writer
+    from pi_harness.corpus.curator import Curator
+    from pi_harness.corpus.format import Classification
+
+    cfg = _make_config(tmp_corpus_root)
+    curator = Curator(cfg)
+    curator._ensure_git()
+    entry = _make_entry(classification=Classification.OBSERVATIONAL, body="commit me")
+    now = datetime(2026, 5, 28, tzinfo=timezone.utc)
+    with writer.curator_context():
+        writer.archive_entry(entry, tmp_corpus_root, now)
+    before = _git_log_count(tmp_corpus_root)
+
+    curator.restore_archived(entry.id)
+
+    assert _git_log_count(tmp_corpus_root) == before + 1
+
+
+def test_restore_unknown_raises(tmp_corpus_root: Path) -> None:
+    from pi_harness.corpus.curator import Curator
+
+    cfg = _make_config(tmp_corpus_root)
+    curator = Curator(cfg)
+    with pytest.raises(FileNotFoundError):
+        curator.restore_archived("does-not-exist")
