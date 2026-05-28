@@ -98,6 +98,46 @@ def test_update_spec_missing(client: TestClient) -> None:
     assert client.put("/specs/spec-nope", json={"title": "x"}).status_code == 404
 
 
+def test_put_clears_decomposed_state_when_content_changes(client: TestClient) -> None:
+    """A content edit invalidates the persisted decomposition: status drops
+    back to 'draft', linter_score and decomposed_tasks are cleared. Without
+    this, the dashboard would show a 'decomposed' spec whose tasks no longer
+    reflect the goal/criteria the user just changed."""
+    fake = MagicMock()
+    fake.decompose.return_value = _decomposed()
+    app.dependency_overrides[get_decomposer] = lambda: fake
+
+    created = client.post("/specs", json=_payload()).json()
+    client.post(f"/specs/{created['id']}/lint")
+    client.post(f"/specs/{created['id']}/decompose")
+
+    client.put(f"/specs/{created['id']}", json={"goal": "An entirely new goal"})
+
+    fetched = client.get(f"/specs/{created['id']}").json()
+    assert fetched["status"] == "draft"
+    assert fetched["linter_score"] is None
+    assert fetched["decomposed_tasks"] is None
+
+
+def test_put_preserves_decomposed_state_when_only_run_shape_changes(client: TestClient) -> None:
+    """Editing run-shape knobs (session_id, sync_profile, etc.) doesn't change
+    what the decomposer would produce, so the persisted tasks must survive."""
+    fake = MagicMock()
+    fake.decompose.return_value = _decomposed()
+    app.dependency_overrides[get_decomposer] = lambda: fake
+
+    created = client.post("/specs", json=_payload()).json()
+    client.post(f"/specs/{created['id']}/lint")
+    client.post(f"/specs/{created['id']}/decompose")
+
+    client.put(f"/specs/{created['id']}", json={"session_id": "sess-1"})
+
+    fetched = client.get(f"/specs/{created['id']}").json()
+    assert fetched["status"] == "decomposed"
+    assert fetched["decomposed_tasks"] is not None
+    assert fetched["session_id"] == "sess-1"
+
+
 def test_list_after_create(client: TestClient) -> None:
     a = client.post("/specs", json=_payload(title="A")).json()
     b = client.post("/specs", json=_payload(title="B")).json()
@@ -122,6 +162,26 @@ def test_lint_persists_status_when_no_errors(client: TestClient) -> None:
     fetched = client.get(f"/specs/{created['id']}").json()
     assert fetched["status"] == "linted"
     assert fetched["linter_score"] is not None
+
+
+def test_lint_does_not_demote_a_decomposed_spec(client: TestClient) -> None:
+    """Lint is a passive check; clicking it on an already-decomposed spec
+    (without editing first) must not undo the decomposition. Editing is the
+    only thing that invalidates decomposed_tasks, and the PUT handler is what
+    enforces that."""
+    fake = MagicMock()
+    fake.decompose.return_value = _decomposed()
+    app.dependency_overrides[get_decomposer] = lambda: fake
+
+    created = client.post("/specs", json=_payload()).json()
+    client.post(f"/specs/{created['id']}/lint")
+    client.post(f"/specs/{created['id']}/decompose")
+
+    client.post(f"/specs/{created['id']}/lint")
+
+    fetched = client.get(f"/specs/{created['id']}").json()
+    assert fetched["status"] == "decomposed"
+    assert fetched["decomposed_tasks"] is not None
 
 
 def test_lint_does_not_promote_on_errors(client: TestClient) -> None:
@@ -157,12 +217,51 @@ def test_decompose_404_on_unknown_spec(client: TestClient) -> None:
     assert client.post("/specs/nope/decompose").status_code == 404
 
 
+def test_decompose_persists_tasks_on_spec(client: TestClient) -> None:
+    """The decomposer's output is expensive (LLM call); persist it on the spec
+    so subsequent /launch reads from the spec instead of paying again."""
+    fake = MagicMock()
+    fake.decompose.return_value = _decomposed()
+    app.dependency_overrides[get_decomposer] = lambda: fake
+
+    created = client.post("/specs", json=_payload()).json()
+    client.post(f"/specs/{created['id']}/lint")
+    client.post(f"/specs/{created['id']}/decompose")
+
+    fetched = client.get(f"/specs/{created['id']}").json()
+    assert fetched["decomposed_tasks"] is not None
+    assert [t["id"] for t in fetched["decomposed_tasks"]] == ["t-lead", "t-cancel"]
+    assert fetched["decomposed_tasks"][1]["blocked_by"] == ["t-lead"]
+
+
 # ---------- /launch ----------
 
 
 def test_launch_requires_decomposed(client: TestClient) -> None:
     created = client.post("/specs", json=_payload()).json()
     assert client.post(f"/specs/{created['id']}/launch").status_code == 409
+
+
+def test_launch_reuses_persisted_tasks_without_redecomposing(client: TestClient) -> None:
+    """Decomposition is a slow LLM call. After /decompose has run, /launch
+    must read the persisted tasks off the spec rather than re-deriving them."""
+    fake_dec = MagicMock()
+    fake_dec.decompose.return_value = _decomposed()
+    fake_coord = MagicMock()
+    fake_coord.launch.return_value = MagicMock(run_id="run-reuse")
+    app.dependency_overrides[get_decomposer] = lambda: fake_dec
+    app.dependency_overrides[get_coordinator] = lambda: fake_coord
+
+    created = client.post("/specs", json=_payload()).json()
+    client.post(f"/specs/{created['id']}/lint")
+    client.post(f"/specs/{created['id']}/decompose")
+    assert fake_dec.decompose.call_count == 1
+    fake_dec.decompose.reset_mock()
+
+    r = client.post(f"/specs/{created['id']}/launch")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"run_id": "run-reuse"}
+    fake_dec.decompose.assert_not_called()
 
 
 def test_launch_builds_real_runspec_and_returns_run_id(client: TestClient) -> None:

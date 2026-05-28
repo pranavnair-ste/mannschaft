@@ -538,6 +538,10 @@ export interface components {
             session_id?: string | null;
             /** Corpus Classifications */
             corpus_classifications?: string[];
+            /** Decomposed Tasks */
+            decomposed_tasks?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /** SpecList */
         SpecList: {
