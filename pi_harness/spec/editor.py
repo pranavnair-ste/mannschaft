@@ -1,8 +1,11 @@
 """FastAPI HTTP surface for the spec layer.
 
-Default port: 8800 (ClawTeam's `board serve --port 8080` uses 8080 — do NOT
-collide). Run directly: `uv run python -m pi_harness.spec.editor` or
-`uv run pi-harness serve`.
+This module exposes a `router` (mounted by `pi_harness.api.server`) and a
+standalone `app` (for tests + isolated debugging via
+`uv run python -m pi_harness.spec.editor`). The canonical user-facing
+entry point is `pi-harness serve`, which boots the unified dashboard app
+(`pi_harness.api.server`) — that mounts this router alongside the runs /
+corpus / guards / ws routes on a single port (default 8800).
 
 The /launch route bridges to Plan 5's Coordinator through the shared
 spec_to_runspec helper so the dashboard and the CLI emit identical runs.

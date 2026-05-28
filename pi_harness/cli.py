@@ -7,9 +7,7 @@ in-process modules the FastAPI editor uses — no duplicated business logic.
   pi-harness lint <spec>        pure linter; exits 0/1/2 by severity
   pi-harness decompose <spec>   print JSON task list; gated on lint score 1.0
   pi-harness spec new|ls|show|rm|edit   manage ~/.pi-harness/specs/*.md
-  pi-harness serve              boot the FastAPI editor
-
-Plan 8 registers `pi-harness dashboard` on the same Typer `app`.
+  pi-harness serve              boot the dashboard backend (spec router + runs + corpus + guards + ws)
 """
 from __future__ import annotations
 
@@ -307,15 +305,18 @@ def spec_edit(spec_id: str) -> None:
 
 
 @app.command()
-def serve(  # pragma: no cover (uvicorn boot)
+def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind address."),
     port: int = typer.Option(8800, "--port", help="Bind port (8080 is ClawTeam's board)."),
 ) -> None:
-    """Boot the FastAPI spec editor."""
+    """Boot the FastAPI dashboard backend (mounts spec router + runs + corpus
+    + guards + ws on a single port)."""
     import uvicorn
 
-    from pi_harness.spec.editor import app as fastapi_app
+    from pi_harness.api.server import create_app, load_dashboard_config
+    from pi_harness.config import load_config
 
+    fastapi_app = create_app(load_config(), load_dashboard_config())
     uvicorn.run(fastapi_app, host=host, port=port, reload=False)
 
 
