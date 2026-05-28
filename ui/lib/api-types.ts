@@ -261,6 +261,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_settings_models_get"];
+        /** Put Settings */
+        put: operations["put_settings_settings_models_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/models/local-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Discover Local Models
+         * @description Query the user's local OpenAI-compatible server at <base_url>/models
+         *     and return the model id list. Returns {models: [], error: ...} on failure
+         *     so the UI can render a hint instead of a generic 500.
+         */
+        get: operations["discover_local_models_settings_models_local_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -289,6 +329,16 @@ export interface components {
             parent_run_id: string;
             /** Branched From Step */
             branched_from_step: string;
+        };
+        /** BucketBody */
+        BucketBody: {
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "api" | "local";
+            /** Model */
+            model: string;
         };
         /** CorpusEntryDTO */
         CorpusEntryDTO: {
@@ -491,6 +541,13 @@ export interface components {
             goal?: string | null;
             /** Spec Id */
             spec_id?: string | null;
+        };
+        /** SettingsBody */
+        SettingsBody: {
+            orchestrator: components["schemas"]["BucketBody"];
+            builder: components["schemas"]["BucketBody"];
+            /** Local Base Url */
+            local_base_url: string;
         };
         /** Spec */
         Spec: {
@@ -1136,6 +1193,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PromotionCandidateDTO"][];
+                };
+            };
+        };
+    };
+    get_settings_settings_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsBody"];
+                };
+            };
+        };
+    };
+    put_settings_settings_models_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discover_local_models_settings_models_local_models_get: {
+        parameters: {
+            query: {
+                base_url: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -2,9 +2,9 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, FileText, Wrench, Layers, Database, Users, MoonStar, SunMedium } from "lucide-react";
+import { Boxes, FileText, Wrench, Layers, Database, Users, MoonStar, SunMedium, Settings as SettingsIcon } from "lucide-react";
 
-// 6-component audit order from HARNESS_ARCHITECTURE.md §5
+// 6-component audit order from HARNESS_ARCHITECTURE.md §5, plus Settings.
 const NAV = [
   { href: "/", label: "Workspace", icon: Boxes },
   { href: "/specs", label: "Prompt Shape", icon: FileText },
@@ -12,6 +12,7 @@ const NAV = [
   { href: "/corpus", label: "Context", icon: Layers },
   { href: "/memory", label: "Memory", icon: Database },
   { href: "/subagents", label: "Subagents", icon: Users },
+  { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
 export function LeftRail() {

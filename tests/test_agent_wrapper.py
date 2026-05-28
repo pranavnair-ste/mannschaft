@@ -31,6 +31,56 @@ def test_build_argv_unknown_executor_raises():
         _build_argv("nope", [])
 
 
+def test_build_argv_pi_passes_provider_and_model_when_set():
+    argv = _build_argv("pi", ["my prompt"], provider="openai", model="gpt-5")
+    assert "--provider" in argv
+    assert argv[argv.index("--provider") + 1] == "openai"
+    assert "--model" in argv
+    assert argv[argv.index("--model") + 1] == "gpt-5"
+    # The prompt is still appended last so ClawTeam-injected `-p <prompt>` lands there.
+    assert argv[-1] == "my prompt"
+
+
+def test_build_argv_pi_omits_provider_when_none():
+    argv = _build_argv("pi", ["p"])
+    assert "--provider" not in argv
+    assert "--model" not in argv
+
+
+def test_resolve_provider_model_api_bucket_defaults(tmp_path, monkeypatch):
+    """With no saved settings, 'reasoning' resolves to (openai, gpt-5),
+    'fast' to (openai, gpt-5-mini) — matching today's behavior."""
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    from pi_harness.agent_wrapper import _resolve_provider_model
+
+    assert _resolve_provider_model("reasoning") == ("openai", "gpt-5")
+    assert _resolve_provider_model("fast") == ("openai", "gpt-5-mini")
+
+
+def test_resolve_provider_model_local_uses_harness_local_provider(tmp_path, monkeypatch):
+    """When the user picks 'local' for a bucket, the wrapper must hand pi the
+    name of the local provider we registered in pi's models.json — currently
+    'harness-local'."""
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    from pi_harness.agent_wrapper import _resolve_provider_model
+    from pi_harness.settings import BucketConfig, HarnessSettings, save_settings
+
+    save_settings(HarnessSettings(
+        orchestrator=BucketConfig(provider="local", model="qwen2.5-coder:7b"),
+        builder=BucketConfig(provider="api", model="gpt-5-mini"),
+    ))
+    assert _resolve_provider_model("reasoning") == ("harness-local", "qwen2.5-coder:7b")
+    assert _resolve_provider_model("fast") == ("openai", "gpt-5-mini")
+
+
+def test_resolve_provider_model_unknown_bucket_raises(tmp_path, monkeypatch):
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    from pi_harness.agent_wrapper import _resolve_provider_model
+
+    with pytest.raises(ValueError, match="bucket"):
+        _resolve_provider_model("middle")
+
+
 def test_consume_stream_writes_events_to_db(tmp_path: Path):
     db = tmp_path / "traj.db"
     init_db(db)
