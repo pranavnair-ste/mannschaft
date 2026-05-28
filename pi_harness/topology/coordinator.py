@@ -127,28 +127,31 @@ class Coordinator:
         team_name = f"team-{run_id[-8:]}"
         template_dict["template"]["name"] = template_name
 
-        # 4b. Register the profiles the template references (idempotent upsert).
-        #     ClawTeam's profile.command overrides the template's command at
-        #     spawn time, so we set profile.command to the pi_harness wrapper
-        #     here -- every spawned agent runs through it, capturing its NDJSON
-        #     event stream into the trajectory store. agent_id is picked up
-        #     from CLAWTEAM_AGENT_NAME (set by ClawTeam in each pane).
+        # Route every agent's command through the pi_harness wrapper so its
+        # NDJSON event stream lands in the trajectory store. ClawTeam's launch
+        # uses the template's top-level ``command`` unless a top-level
+        # ``--profile`` is passed; we set BOTH (template AND profile.command)
+        # as defense-in-depth. agent_id is picked up from CLAWTEAM_AGENT_NAME
+        # (set by ClawTeam in each pane).
         import shlex
 
-        wrapper_cmd = " ".join(
-            shlex.quote(part)
-            for part in [
-                sys.executable,
-                "-m",
-                "pi_harness.agent_wrapper",
-                "--executor",
-                spec.executor,
-                "--run-id",
-                run_id,
-            ]
-        )
+        wrapper_argv = [
+            sys.executable,
+            "-m",
+            "pi_harness.agent_wrapper",
+            "--executor",
+            spec.executor,
+            "--run-id",
+            run_id,
+        ]
+        template_dict["template"]["command"] = list(wrapper_argv)
+        wrapper_cmd_str = " ".join(shlex.quote(p) for p in wrapper_argv)
+
+        # 4b. Register the profiles the template references (idempotent upsert).
         for pspec in build_profile_specs(self._config):
-            self._clawteam_client.register_profile(replace(pspec, command=wrapper_cmd))
+            self._clawteam_client.register_profile(
+                replace(pspec, command=wrapper_cmd_str)
+            )
 
         # 5. Register template + launch team via Plan 1.
         self._clawteam_client.install_template(

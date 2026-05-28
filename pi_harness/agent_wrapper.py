@@ -130,10 +130,12 @@ def main(argv: list[str] | None = None) -> int:
         help="trajectory db path; defaults to Config.trajectory_db_path",
     )
     ap.add_argument(
-        "prompt", nargs=argparse.REMAINDER,
-        help="prompt + extra args passed to the executor (precede with --)",
+        "-p", "--prompt",
+        help="The agent prompt (ClawTeam's adapter passes this via -p)",
     )
-    args = ap.parse_args(argv)
+    # Anything else (unknown flags, trailing positionals) is forwarded to the
+    # executor verbatim so callers can pass executor-specific flags.
+    args, extras = ap.parse_known_args(argv)
     if not args.run_id:
         ap.error("--run-id is required (or set PI_HARNESS_RUN_ID)")
     if not args.agent_id:
@@ -144,9 +146,12 @@ def main(argv: list[str] | None = None) -> int:
         from pi_harness.config import load_config
         db_path = load_config(env_file=None).trajectory_db_path
 
-    prompt_args = args.prompt
-    if prompt_args and prompt_args[0] == "--":
-        prompt_args = prompt_args[1:]
+    # Strip a leading "--" separator (direct-CLI users may use it).
+    if extras and extras[0] == "--":
+        extras = extras[1:]
+    prompt_args = list(extras)
+    if args.prompt is not None:
+        prompt_args.append(args.prompt)
 
     return run(
         executor=args.executor,
