@@ -98,15 +98,19 @@ class TestCoordinatorLaunch:
         with pytest.raises(ValueError):
             coord.launch(spec)
 
-    def test_launch_registers_both_profiles_with_executor(self, coord, basic_spec):
+    def test_launch_registers_both_profiles_with_wrapper(self, coord, basic_spec):
         """A fresh-launch must register both pi-openai profiles (idempotent
-        upsert) before the team launches, with --command set to the executor."""
+        upsert) before the team launches, with profile.command routing through
+        pi_harness.agent_wrapper so every agent's NDJSON stream is captured."""
         coord.launch(basic_spec)
         client = coord._clawteam_client
         assert client.register_profile.call_count == 2
         registered = [c.args[0] for c in client.register_profile.call_args_list]
         assert {p.name for p in registered} == {"pi-openai-reasoning", "pi-openai-fast"}
-        assert all(p.command == basic_spec.executor for p in registered)
+        for p in registered:
+            assert "pi_harness.agent_wrapper" in p.command
+            assert f"--executor {basic_spec.executor}" in p.command
+            assert "--run-id" in p.command
         # Profiles must exist before the team launches.
         names = [c[0] for c in client.mock_calls]
         assert names.index("register_profile") < names.index("launch_team")
@@ -259,25 +263,6 @@ class TestCoordinatorTemplateEmission:
         assert names.index("install_template") < names.index("launch_team"), (
             f"install_template must be called before launch_team; call order was: {names}"
         )
-
-    def test_template_command_routes_through_wrapper(self, coord, basic_spec):
-        """Every ClawTeam-launched agent runs under pi_harness.agent_wrapper so
-        its NDJSON stream is captured into the trajectory store."""
-        import sys
-        import tomllib
-
-        coord.launch(basic_spec)
-        install_call = coord._clawteam_client.install_template.call_args
-        template_toml = (
-            install_call.args[1] if len(install_call.args) > 1 else install_call.kwargs["toml_text"]
-        )
-        parsed = tomllib.loads(template_toml)
-        cmd = parsed["template"]["command"]
-        assert cmd[0] == sys.executable
-        assert cmd[1:5] == ["-m", "pi_harness.agent_wrapper", "--executor", basic_spec.executor]
-        assert "--run-id" in cmd
-        run_id_value = cmd[cmd.index("--run-id") + 1]
-        assert run_id_value.startswith("run-")
 
     def test_seeds_task_dag_via_create_task(self, coord, basic_spec):
         """For each TaskDef returned by topology.plan, Coordinator must call

@@ -127,25 +127,28 @@ class Coordinator:
         team_name = f"team-{run_id[-8:]}"
         template_dict["template"]["name"] = template_name
 
-        # Route every agent's command through the pi_harness wrapper so its
-        # NDJSON event stream lands in the trajectory store. The wrapper exec's
-        # the executor with stdin=DEVNULL (pi hangs otherwise). agent_id is
-        # picked up from CLAWTEAM_AGENT_NAME (set by ClawTeam in each pane).
-        template_dict["template"]["command"] = [
-            sys.executable,
-            "-m",
-            "pi_harness.agent_wrapper",
-            "--executor",
-            spec.executor,
-            "--run-id",
-            run_id,
-        ]
-
         # 4b. Register the profiles the template references (idempotent upsert).
-        #     --command carries the chosen executor so `pi` vs `codex` is honored;
-        #     ClawTeam's --agent only accepts claude/codex/gemini/kimi/nanobot.
+        #     ClawTeam's profile.command overrides the template's command at
+        #     spawn time, so we set profile.command to the pi_harness wrapper
+        #     here -- every spawned agent runs through it, capturing its NDJSON
+        #     event stream into the trajectory store. agent_id is picked up
+        #     from CLAWTEAM_AGENT_NAME (set by ClawTeam in each pane).
+        import shlex
+
+        wrapper_cmd = " ".join(
+            shlex.quote(part)
+            for part in [
+                sys.executable,
+                "-m",
+                "pi_harness.agent_wrapper",
+                "--executor",
+                spec.executor,
+                "--run-id",
+                run_id,
+            ]
+        )
         for pspec in build_profile_specs(self._config):
-            self._clawteam_client.register_profile(replace(pspec, command=spec.executor))
+            self._clawteam_client.register_profile(replace(pspec, command=wrapper_cmd))
 
         # 5. Register template + launch team via Plan 1.
         self._clawteam_client.install_template(
