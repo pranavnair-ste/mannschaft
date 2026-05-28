@@ -264,6 +264,74 @@ def test_launch_reuses_persisted_tasks_without_redecomposing(client: TestClient)
     fake_dec.decompose.assert_not_called()
 
 
+def test_launch_schedules_background_finalization(client: TestClient) -> None:
+    """/launch must hand off to a background task that calls wait_for_completion
+    + on_completion. Without this, the dashboard's run registry stays stuck on
+    'running' forever — the launch endpoint is fire-and-forget today."""
+    fake_dec = MagicMock()
+    fake_dec.decompose.return_value = _decomposed()
+    fake_coord = MagicMock()
+    fake_coord.launch.return_value = MagicMock(run_id="run-bg")
+    fake_coord.wait_for_completion.return_value = MagicMock(success=True)
+    app.dependency_overrides[get_decomposer] = lambda: fake_dec
+    app.dependency_overrides[get_coordinator] = lambda: fake_coord
+
+    created = client.post("/specs", json=_payload()).json()
+    client.post(f"/specs/{created['id']}/lint")
+    client.post(f"/specs/{created['id']}/decompose")
+
+    r = client.post(f"/specs/{created['id']}/launch")
+    assert r.status_code == 200, r.text
+
+    # TestClient runs background tasks before .post() returns, so by now the
+    # finalizer should have driven the run to completion.
+    fake_coord.wait_for_completion.assert_called_once()
+    fake_coord.on_completion.assert_called_once()
+
+
+def test_launch_finalizer_marks_spec_complete_on_success(client: TestClient) -> None:
+    """After a successful run, the spec moves draft→linted→decomposed→running
+    →complete. The 'complete' transition is what makes the editor stop
+    blocking a re-launch and lets the user see closure."""
+    fake_dec = MagicMock()
+    fake_dec.decompose.return_value = _decomposed()
+    fake_coord = MagicMock()
+    fake_coord.launch.return_value = MagicMock(run_id="run-ok")
+    fake_coord.wait_for_completion.return_value = MagicMock(success=True)
+    app.dependency_overrides[get_decomposer] = lambda: fake_dec
+    app.dependency_overrides[get_coordinator] = lambda: fake_coord
+
+    created = client.post("/specs", json=_payload()).json()
+    client.post(f"/specs/{created['id']}/lint")
+    client.post(f"/specs/{created['id']}/decompose")
+    client.post(f"/specs/{created['id']}/launch")
+
+    fetched = client.get(f"/specs/{created['id']}").json()
+    assert fetched["status"] == "complete"
+
+
+def test_launch_finalizer_rolls_spec_back_to_decomposed_on_failure(client: TestClient) -> None:
+    """If the run fails or times out, drop the spec back to 'decomposed' so
+    the user can retry without re-running the LLM decomposer. The persisted
+    decomposed_tasks are still valid (the spec content didn't change)."""
+    fake_dec = MagicMock()
+    fake_dec.decompose.return_value = _decomposed()
+    fake_coord = MagicMock()
+    fake_coord.launch.return_value = MagicMock(run_id="run-fail")
+    fake_coord.wait_for_completion.return_value = MagicMock(success=False)
+    app.dependency_overrides[get_decomposer] = lambda: fake_dec
+    app.dependency_overrides[get_coordinator] = lambda: fake_coord
+
+    created = client.post("/specs", json=_payload()).json()
+    client.post(f"/specs/{created['id']}/lint")
+    client.post(f"/specs/{created['id']}/decompose")
+    client.post(f"/specs/{created['id']}/launch")
+
+    fetched = client.get(f"/specs/{created['id']}").json()
+    assert fetched["status"] == "decomposed"
+    assert fetched["decomposed_tasks"] is not None
+
+
 def test_launch_builds_real_runspec_and_returns_run_id(client: TestClient) -> None:
     fake_dec = MagicMock()
     fake_dec.decompose.return_value = _decomposed()
@@ -287,5 +355,6 @@ def test_launch_builds_real_runspec_and_returns_run_id(client: TestClient) -> No
     assert run_spec.tasks is not None
     by = {t.task_id: t for t in run_spec.tasks}
     assert by["t-cancel"].blocked_by == ["t-lead"]
-
-    assert client.get(f"/specs/{created['id']}").json()["status"] == "running"
+    # Status transitions through 'running' → 'complete' once the background
+    # finalizer drives wait_for_completion to a success result; the running
+    # state itself is asserted in test_launch_schedules_background_finalization.

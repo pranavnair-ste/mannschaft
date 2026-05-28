@@ -17,7 +17,9 @@ import re
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
 from pi_harness.spec.decomposer import DecomposedTask
@@ -31,10 +33,40 @@ from pi_harness.spec.format import (
 from pi_harness.spec.linter import Linter, LintResult
 from pi_harness.spec.runspec import build_coordinator, spec_to_runspec
 
+logger = logging.getLogger(__name__)
+
 # Routes live on a router so both this module's standalone ``app`` and the
 # Symphony dashboard app (pi_harness.api.server) can mount the same /specs
 # surface without duplicating handlers.
 router = APIRouter()
+
+
+def _set_spec_status(spec_id: str, new_status: str) -> None:
+    """Atomically rewrite a spec file with a new status. Used by the launch
+    finalizer; tolerant of a missing/changed-from-under-us spec file."""
+    try:
+        spec = parse_spec(spec_path(spec_id))
+    except Exception:
+        logger.exception("finalizer: failed to load spec %s for status update", spec_id)
+        return
+    data = spec.__dict__.copy()
+    data["status"] = new_status
+    data["updated_at"] = _now()
+    serialize_spec(Spec(**data), spec_path(spec_id))
+
+
+def _finalize_run(coordinator, handle, spec_id: str) -> None:
+    """Background-task body: wait for the team to terminate, run the improve
+    loop + teardown via on_completion, and flip the spec to its post-run
+    status. Errors are logged; they must not crash the FastAPI worker."""
+    success = False
+    try:
+        result = coordinator.wait_for_completion(handle)
+        success = bool(getattr(result, "success", False))
+        coordinator.on_completion(handle)
+    except Exception:
+        logger.exception("finalizer: background completion failed for run %s", handle.run_id)
+    _set_spec_status(spec_id, "complete" if success else "decomposed")
 
 
 # ---------- request / response models ----------
@@ -227,6 +259,7 @@ def decompose_spec(spec_id: str, decomposer=Depends(get_decomposer)) -> Decompos
 @router.post("/specs/{spec_id}/launch", response_model=LaunchResponse)
 def launch_spec(
     spec_id: str,
+    background_tasks: BackgroundTasks,
     decomposer=Depends(get_decomposer),
     coordinator=Depends(get_coordinator),
 ) -> LaunchResponse:
@@ -252,6 +285,14 @@ def launch_spec(
     data["status"] = "running"
     data["updated_at"] = _now()
     serialize_spec(Spec(**data), spec_path(spec_id))
+
+    # Reconcile the run after the HTTP response is sent: poll ClawTeam to
+    # completion, run improve + teardown, flip spec status. Without this the
+    # registry stays stuck on 'running' forever (the /launch endpoint is
+    # otherwise fire-and-forget; the CLI path is what currently drives
+    # wait_for_completion).
+    background_tasks.add_task(_finalize_run, coordinator, handle, spec_id)
+
     return LaunchResponse(run_id=handle.run_id)
 
 
