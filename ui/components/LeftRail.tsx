@@ -64,8 +64,9 @@ export function LeftRail() {
         <button
           type="button"
           onClick={toggleTheme}
-          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800/50"
+          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:text-zinc-300 dark:hover:bg-zinc-800/50 dark:focus-visible:ring-zinc-500"
           aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+          aria-pressed={isDark}
           title={isDark ? "Switch to light mode" : "Switch to dark mode"}
         >
           {isDark ? <SunMedium className="h-4 w-4" /> : <MoonStar className="h-4 w-4" />}
