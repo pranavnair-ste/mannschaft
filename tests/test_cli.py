@@ -280,3 +280,37 @@ def test_spec_rm_force_deletes(tmp_path, monkeypatch):
     result = runner.invoke(app, ["spec", "rm", "doomed", "--force"])
     assert result.exit_code == 0
     assert not target.exists()
+
+
+# --------------------------------------------------------------------------- #
+# serve
+# --------------------------------------------------------------------------- #
+
+
+def test_serve_boots_the_dashboard_app(monkeypatch):
+    """`pi-harness serve` must boot the unified dashboard app, which mounts
+    /runs, /corpus, /guards, /ws and the spec router — not just the spec
+    editor's /specs routes."""
+    import uvicorn
+
+    from pi_harness.cli import app
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    captured: dict = {}
+
+    def fake_run(application, host, port, reload):
+        captured["app"] = application
+        captured["host"] = host
+        captured["port"] = port
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+
+    result = runner.invoke(app, ["serve"])
+    assert result.exit_code == 0, result.stdout
+
+    served = captured["app"]
+    paths = {r.path for r in served.routes if hasattr(r, "path")}
+    assert "/healthz" in paths, paths
+    assert "/runs" in paths, paths
+    assert "/specs" in paths, paths
