@@ -6,6 +6,7 @@ via client.create_task, and schedules a post-completion improve run.
 """
 from __future__ import annotations
 
+import sys
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -125,6 +126,20 @@ class Coordinator:
         template_name = f"topology-{spec.mode.value}-{run_id[-8:]}"
         team_name = f"team-{run_id[-8:]}"
         template_dict["template"]["name"] = template_name
+
+        # Route every agent's command through the pi_harness wrapper so its
+        # NDJSON event stream lands in the trajectory store. The wrapper exec's
+        # the executor with stdin=DEVNULL (pi hangs otherwise). agent_id is
+        # picked up from CLAWTEAM_AGENT_NAME (set by ClawTeam in each pane).
+        template_dict["template"]["command"] = [
+            sys.executable,
+            "-m",
+            "pi_harness.agent_wrapper",
+            "--executor",
+            spec.executor,
+            "--run-id",
+            run_id,
+        ]
 
         # 4b. Register the profiles the template references (idempotent upsert).
         #     --command carries the chosen executor so `pi` vs `codex` is honored;

@@ -260,6 +260,25 @@ class TestCoordinatorTemplateEmission:
             f"install_template must be called before launch_team; call order was: {names}"
         )
 
+    def test_template_command_routes_through_wrapper(self, coord, basic_spec):
+        """Every ClawTeam-launched agent runs under pi_harness.agent_wrapper so
+        its NDJSON stream is captured into the trajectory store."""
+        import sys
+        import tomllib
+
+        coord.launch(basic_spec)
+        install_call = coord._clawteam_client.install_template.call_args
+        template_toml = (
+            install_call.args[1] if len(install_call.args) > 1 else install_call.kwargs["toml_text"]
+        )
+        parsed = tomllib.loads(template_toml)
+        cmd = parsed["template"]["command"]
+        assert cmd[0] == sys.executable
+        assert cmd[1:5] == ["-m", "pi_harness.agent_wrapper", "--executor", basic_spec.executor]
+        assert "--run-id" in cmd
+        run_id_value = cmd[cmd.index("--run-id") + 1]
+        assert run_id_value.startswith("run-")
+
     def test_seeds_task_dag_via_create_task(self, coord, basic_spec):
         """For each TaskDef returned by topology.plan, Coordinator must call
         client.create_task with the right owner + blocked_by chain."""

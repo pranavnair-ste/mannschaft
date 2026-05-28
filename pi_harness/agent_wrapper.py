@@ -19,13 +19,14 @@ Usage (subprocess from ClawTeam template, future Task 6.4):
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import IO, Iterable
 
 from pi_harness.trajectory.agent_capture import PiEventParser
-from pi_harness.trajectory.store import write_event
+from pi_harness.trajectory.store import init_db, write_event
 
 
 def _build_argv(executor: str, prompt_args: list[str]) -> list[str]:
@@ -62,6 +63,8 @@ def consume_stream(
     ``tee_to`` optionally mirrors each line (so ClawTeam's tmux pane shows the
     agent's output). Returns the count of events written.
     """
+    if db_path is not None:
+        init_db(db_path)  # idempotent; ensures the events table exists
     parser = PiEventParser(run_id=run_id, agent_id=agent_id)
     count = 0
     for line in lines:
@@ -111,8 +114,16 @@ def main(argv: list[str] | None = None) -> int:
         description="Wrap pi/codex and capture its NDJSON events into the trajectory store.",
     )
     ap.add_argument("--executor", required=True, choices=["pi", "codex"])
-    ap.add_argument("--run-id", required=True)
-    ap.add_argument("--agent-id", required=True)
+    ap.add_argument(
+        "--run-id",
+        default=os.environ.get("PI_HARNESS_RUN_ID"),
+        help="defaults to $PI_HARNESS_RUN_ID (set by Coordinator at template install time)",
+    )
+    ap.add_argument(
+        "--agent-id",
+        default=os.environ.get("CLAWTEAM_AGENT_NAME"),
+        help="defaults to $CLAWTEAM_AGENT_NAME (set by ClawTeam in the agent's pane)",
+    )
     ap.add_argument(
         "--db-path",
         default=None,
@@ -123,6 +134,10 @@ def main(argv: list[str] | None = None) -> int:
         help="prompt + extra args passed to the executor (precede with --)",
     )
     args = ap.parse_args(argv)
+    if not args.run_id:
+        ap.error("--run-id is required (or set PI_HARNESS_RUN_ID)")
+    if not args.agent_id:
+        ap.error("--agent-id is required (or set CLAWTEAM_AGENT_NAME)")
 
     db_path = args.db_path
     if db_path is None:
