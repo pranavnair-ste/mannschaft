@@ -115,6 +115,16 @@ def launch(
     sync_profile: Optional[str] = typer.Option(
         None, "--sync-profile", help="ClawTeam profile to force when sync_mode is sync_all."
     ),
+    in_place: bool = typer.Option(
+        False, "--in-place",
+        help="Run in the current checkout instead of an isolated run/<id> branch "
+        "(NOT recommended: agents commit to your working branch).",
+    ),
+    keep_alive: bool = typer.Option(
+        False, "--keep-alive",
+        help="On failure, leave the team running for inspection instead of "
+        "snapshotting and tearing it down.",
+    ),
     api_url: Optional[str] = typer.Option(
         None, "--api-url",
         help="If set, POST to <url>/specs/<id>/launch instead of launching in-process.",
@@ -140,8 +150,10 @@ def launch(
         spec, tasks, session_id=session, executor=executor, sync_profile=sync_profile
     )
     coord = _make_coordinator(cfg)
-    handle = coord.launch(run_spec)
+    handle = coord.launch(run_spec, in_place=in_place, keep_alive=keep_alive)
     typer.echo(handle.run_id)
+    if handle.run_branch:
+        typer.echo(f"  isolated on branch: {handle.run_branch}")
 
     if detach:
         return
@@ -150,6 +162,8 @@ def launch(
     coord.on_completion(handle)
     for task_id, status in sorted(result.terminal_statuses.items()):
         typer.echo(f"  task={task_id} status={status}")
+    if result.success and handle.run_branch:
+        typer.echo(f"work is on branch {handle.run_branch} — diff and merge when ready")
     if not result.success:
         typer.echo("run did not complete successfully", err=True)
         raise typer.Exit(code=1)
