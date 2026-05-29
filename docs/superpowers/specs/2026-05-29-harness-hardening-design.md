@@ -61,11 +61,17 @@ Verified by reading ClawTeam 0.2.x source in `.venv/.../clawteam/`:
   sends only `launch TEMPLATE --team Y --goal Z [--profile P]` — no `--workspace`, no
   `--repo` — and `clawteam launch` defaults to `no-workspace`. That is *why* runs land
   on the user's branch.
+- **Merge is NOT automatic (verified).** The only caller of `merge_workspace` is the
+  manual `clawteam workspace merge <team> <agent> [--target T] [--no-cleanup]`
+  subcommand (`commands.py:3191/3207`). Nothing in `launch` or team-completion merges
+  agent branches — they just sit on per-agent branches forked off `base_branch`. The
+  git layer aborts cleanly on conflict and returns `(success, output)`
+  (`git.py:86-103`).
 
-**Conclusion:** isolation is not something we build — it is something we *enable and
-own the boundary of*. One impl detail to confirm during planning: whether `clawteam
-launch` itself merges agent branches into base, or leaves them dangling (decides
-whether the harness merges `agent → run` branch or ClawTeam does).
+**Conclusion:** isolation is not something we build — it is something we *enable, own
+the boundary of, and consolidate ourselves*. ClawTeam gives us per-agent worktrees +
+branches + a merge primitive, but no automatic consolidation; the harness must drive
+the merge into the run branch (see §5.2).
 
 ## 5. The fixes
 
@@ -82,19 +88,28 @@ Each fix notes: the default behavior, the opt-out, and how it's verified.
   `pyproject` declares all three.
 
 ### 5.2 Run isolation — the branch hazard (safety, default ON)
-- **Default:** every run is isolated. Before launch the harness establishes a
-  run-level branch `run/<run_id>` (off current HEAD) and points ClawTeam at an
-  isolated boundary (`--repo`/`--workspace`) so per-agent worktrees nest inside it.
-  The user's checked-out branch is **never touched**.
-- **Merge policy: review-then-merge — never auto-merge.** On success the harness
-  reports: *"work is on branch `run/<run_id>` — diff and merge when ready."* This
-  matches the user's separate-branch → merge → downstream-audit workflow and keeps a
-  human gate on what enters mainline.
+- **Default:** every run is isolated. Before launch the harness creates a run-level
+  branch `run/<run_id>` off current HEAD, checks it out in an isolated location, and
+  points `clawteam launch --repo <that location> --workspace always` at it — so
+  ClawTeam's `base_branch` is `run/<run_id>` and per-agent worktrees fork off it. The
+  user's checked-out branch is **never touched**.
+- **Consolidation (harness-driven, since ClawTeam won't — see §4):** on successful
+  completion the harness merges each agent branch into `run/<run_id>` via
+  `clawteam workspace merge <team> <agent> --target run/<run_id>`, in task-DAG
+  (`blocked_by`) order. A merge **conflict aborts that agent's merge** (git layer
+  auto-aborts), leaves the branch intact, and is **surfaced in the run report** —
+  never auto-resolved.
+- **Merge policy to mainline: review-then-merge — never auto-merge to your branch.**
+  Consolidation stops at `run/<run_id>`. The harness reports: *"work is on branch
+  `run/<run_id>` — diff and merge when ready."* This matches the user's separate-branch
+  → merge → downstream-audit workflow and keeps a human gate on what enters mainline.
 - **Opt-out:** `--in-place` for power users who knowingly want to run in the current
   tree.
 - **Verify:** unit test (mock git + ClawTeamClient) asserting (a) a `run/<id>` branch
-  is created off HEAD, (b) the user's branch HEAD is unchanged after a run, (c)
-  `--in-place` skips branch creation.
+  is created off HEAD, (b) per-agent branches are merged into `run/<id>` in DAG order,
+  (c) a conflicting agent merge is aborted + reported (not force-resolved), (d) the
+  user's *checked-out* branch HEAD is unchanged after a run, (e) `--in-place` skips
+  branch creation + consolidation.
 
 ### 5.3 Guaranteed teardown + snapshot-on-failure (safety, default ON)
 - **Problem:** only clean successes tear down today; failed/timed-out teams are left
@@ -193,8 +208,9 @@ Each phase is its own branch → merge → downstream audit. The detailed step-b
 lands in the implementation plan (writing-plans).
 
 ## 8. Open questions (resolve in planning / micro-spikes)
-- Does `clawteam launch` auto-merge agent branches into base, or leave them? (Decides
-  whether the harness merges `agent → run/<id>` or ClawTeam does.)
+- ~~Does `clawteam launch` auto-merge agent branches into base?~~ **Resolved (§4):**
+  no — merge is the manual `clawteam workspace merge`; the harness drives consolidation
+  into `run/<id>` itself (§5.2).
 - Dedicated run *worktree dir* vs. run *branch* in the same tree — which gives the
   cleanest "your branch untouched" guarantee with least disk churn?
 - `ms quickstart` behavior under headless/agent invocation.
