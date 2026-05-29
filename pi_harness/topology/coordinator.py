@@ -353,25 +353,47 @@ class Coordinator:
         return result
 
     def on_completion(self, handle: RunHandle) -> None:
-        """Called after wait_for_completion. On a clean success: trigger Plan 4's
-        improve run, then tear down the team. Failed/timed-out runs are left up
-        for debugging."""
+        """Always finalize the run safely.
+
+        Success: run the improve loop, consolidate agent branches into the run
+        branch, then tear the team down.
+        Failure/timeout: snapshot the team for debugging, then tear it down —
+        unless ``handle.keep_alive`` is set, in which case it is left live.
+        """
         result = self._last_result.get(handle.run_id)
-        if result is not None and result.success:
+        success = bool(result is not None and result.success)
+        if success:
             self._improve_runner.run_for_completed_run(
                 handle.run_id, self._config, session_id=handle.session_id
             )
+            self.consolidate(handle)
+            self.teardown(handle)
+            return
+        # Failure / timeout: preserve full state for debugging, then stop the
+        # credit burn (snapshot first so it survives teardown).
+        self._clawteam_client.snapshot_team(
+            handle.team_name, tag=f"failed-{handle.run_id[-8:]}"
+        )
+        if not handle.keep_alive:
             self.teardown(handle)
 
     def teardown(self, handle: RunHandle) -> None:
-        """Stop the run's agents and delete its team data.
+        """Stop the run's agents and delete its team data, then remove the run
+        worktree (the run/<id> branch is kept — that's where the work lives).
 
-        Kills the tmux session first (so agents stop immediately and stop
-        burning credit), then removes the team record. Safe to call repeatedly.
-        Callable directly; also invoked by on_completion on a clean success.
+        Kills the tmux session first (so agents stop immediately and stop burning
+        credit), then removes the team record, then the worktree. Safe to call
+        repeatedly.
         """
         self._clawteam_client.kill_tmux_session(handle.team_name)
         self._clawteam_client.cleanup_team(handle.team_name)
+        if handle.workspace_repo:
+            try:
+                git_workspace.remove_run_worktree(
+                    git_workspace.repo_root(), Path(handle.workspace_repo)
+                )
+            except Exception:  # noqa: BLE001 — teardown must never raise
+                pass
 
     def consolidate(self, handle: RunHandle) -> list[str]:
         """Merge each agent's branch into the run branch (default target).

@@ -309,17 +309,36 @@ class TestCoordinatorTeardown:
         client.kill_tmux_session.assert_called_once_with(handle.team_name)
         client.cleanup_team.assert_called_once_with(handle.team_name)
 
-    def test_on_completion_no_teardown_on_failure(self, coord, basic_spec):
-        from pi_harness.clawteam import ClawTeamTimeout
-
-        handle = coord.launch(basic_spec)
-        client = coord._clawteam_client
-        client.wait_for_completion.side_effect = ClawTeamTimeout("nope")
-        client.list_tasks.return_value = []
-        coord.wait_for_completion(handle, timeout=60)
+    def test_on_completion_snapshots_and_tears_down_on_failure(self, coord, basic_spec, mock_clawteam_client):
+        with patch("pi_harness.topology.coordinator.git_workspace"):
+            handle = coord.launch(basic_spec)
+        coord._last_result[handle.run_id] = MagicMock(success=False)
         coord.on_completion(handle)
-        client.kill_tmux_session.assert_not_called()
-        client.cleanup_team.assert_not_called()
+        # snapshot BEFORE teardown, then teardown happens.
+        mock_clawteam_client.snapshot_team.assert_called_once()
+        mock_clawteam_client.kill_tmux_session.assert_called_once_with(handle.team_name)
+        names = [c[0] for c in mock_clawteam_client.mock_calls]
+        assert names.index("snapshot_team") < names.index("kill_tmux_session")
+
+    def test_on_completion_keep_alive_skips_teardown_on_failure(self, coord, basic_spec, mock_clawteam_client):
+        with patch("pi_harness.topology.coordinator.git_workspace"):
+            handle = coord.launch(basic_spec, keep_alive=True)
+        coord._last_result[handle.run_id] = MagicMock(success=False)
+        coord.on_completion(handle)
+        mock_clawteam_client.snapshot_team.assert_called_once()  # still snapshot for debug
+        mock_clawteam_client.kill_tmux_session.assert_not_called()  # left live
+        mock_clawteam_client.cleanup_team.assert_not_called()
+
+    def test_on_completion_consolidates_then_tears_down_on_success(self, coord, basic_spec, mock_clawteam_client):
+        mock_clawteam_client.merge_workspace.return_value = MagicMock(returncode=0)
+        with patch("pi_harness.topology.coordinator.git_workspace"):
+            handle = coord.launch(basic_spec)
+        coord._last_result[handle.run_id] = MagicMock(success=True)
+        coord.on_completion(handle)
+        assert mock_clawteam_client.merge_workspace.called          # consolidated
+        mock_clawteam_client.kill_tmux_session.assert_called_once()  # then torn down
+        names = [c[0] for c in mock_clawteam_client.mock_calls]
+        assert names.index("merge_workspace") < names.index("kill_tmux_session")
 
 
 class TestCoordinatorConsolidate:
