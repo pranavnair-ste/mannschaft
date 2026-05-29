@@ -114,10 +114,18 @@ class ClawTeamClient:
         team_name: str,
         goal: str,
         profile: Optional[str] = None,
+        *,
+        workspace: bool = False,
+        repo: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
         """Spawn a new ClawTeam team from a template.
 
-        Real invocation: ``clawteam --data-dir D launch TEMPLATE --team Y --goal Z [--profile P]``
+        Real invocation: ``clawteam --data-dir D launch TEMPLATE --team Y --goal Z
+        [--profile P] [--workspace] [--repo PATH]``
+
+        When ``workspace`` is True, ClawTeam creates a per-agent git worktree off
+        the current branch of ``repo`` (default cwd); the harness uses this for
+        run isolation (see topology.coordinator).
         """
         sub: List[str] = [
             "launch", template,
@@ -126,6 +134,10 @@ class ClawTeamClient:
         ]
         if profile is not None:
             sub.extend(["--profile", profile])
+        if workspace:
+            sub.append("--workspace")
+        if repo is not None:
+            sub.extend(["--repo", repo])
         return self._run(sub)
 
     def cleanup_team(self, team_name: str) -> subprocess.CompletedProcess:
@@ -134,6 +146,43 @@ class ClawTeamClient:
         Real invocation: ``clawteam --data-dir D team cleanup TEAM --force``
         """
         return self._run(["team", "cleanup", team_name, "--force"])
+
+    def merge_workspace(
+        self,
+        team_name: str,
+        agent_name: str,
+        *,
+        repo: Optional[str] = None,
+        target: Optional[str] = None,
+    ) -> subprocess.CompletedProcess:
+        """Merge one agent's workspace branch into ``target`` (default: base branch).
+
+        Real invocation: ``clawteam --data-dir D workspace merge TEAM AGENT
+        [--repo R] [--target T]``
+
+        Uses ``check=False`` so a merge conflict (non-zero exit) is *returned* for
+        the caller to surface, not raised — consolidation must continue for the
+        remaining agents.
+        """
+        sub: List[str] = ["workspace", "merge", team_name, agent_name]
+        if repo is not None:
+            sub.extend(["--repo", repo])
+        if target is not None:
+            sub.extend(["--target", target])
+        return self._run(sub, check=False)
+
+    def snapshot_team(
+        self, team_name: str, *, tag: Optional[str] = None,
+    ) -> subprocess.CompletedProcess:
+        """Snapshot full team state (config, tasks, events, sessions, costs).
+
+        Real invocation: ``clawteam --data-dir D team snapshot TEAM [--tag L]``.
+        ``check=False`` so a snapshot failure never blocks teardown.
+        """
+        sub: List[str] = ["team", "snapshot", team_name]
+        if tag is not None:
+            sub.extend(["--tag", tag])
+        return self._run(sub, check=False)
 
     def kill_tmux_session(self, team_name: str) -> subprocess.CompletedProcess:
         """Kill the tmux session ClawTeam created for ``team_name``.
