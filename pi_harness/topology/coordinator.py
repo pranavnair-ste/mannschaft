@@ -373,6 +373,25 @@ class Coordinator:
         self._clawteam_client.kill_tmux_session(handle.team_name)
         self._clawteam_client.cleanup_team(handle.team_name)
 
+    def consolidate(self, handle: RunHandle) -> list[str]:
+        """Merge each agent's branch into the run branch (default target).
+
+        Runs in launch order (leader first). A conflicting merge is recorded and
+        skipped — never force-resolved. Returns the list of agent names whose
+        merge conflicted. No-op (returns []) for in-place runs (no run_branch).
+        """
+        if handle.run_branch is None:
+            return []
+        conflicts: list[str] = []
+        for agent_name in handle.agent_names:
+            result = self._clawteam_client.merge_workspace(
+                handle.team_name, agent_name,
+                repo=handle.workspace_repo, target=handle.run_branch,
+            )
+            if getattr(result, "returncode", 0) != 0:
+                conflicts.append(agent_name)
+        return conflicts
+
     def _apply_sync_mode(self, template_dict: dict, spec: RunSpec) -> None:
         """In SYNC_ALL mode, force every agent (leader + workers) onto a
         single profile. PER_AGENT keeps the profiles set by build_template_dict."""

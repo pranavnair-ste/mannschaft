@@ -322,6 +322,43 @@ class TestCoordinatorTeardown:
         client.cleanup_team.assert_not_called()
 
 
+class TestCoordinatorConsolidate:
+    def _isolated_handle(self):
+        from datetime import datetime, timezone
+        return RunHandle(
+            run_id="run-1", team_name="team-1",
+            started_at=datetime.now(timezone.utc), topology=TopologyMode.SEQUENTIAL,
+            run_branch="run/abc", workspace_repo="/wt", agent_names=["a", "b"],
+        )
+
+    def test_consolidate_merges_each_agent_into_run_branch(self, coord, mock_clawteam_client):
+        mock_clawteam_client.merge_workspace.return_value = MagicMock(returncode=0)
+        handle = self._isolated_handle()
+        conflicts = coord.consolidate(handle)
+        assert conflicts == []
+        calls = mock_clawteam_client.merge_workspace.call_args_list
+        assert [c.args[1] for c in calls] == ["a", "b"]  # leader-first order
+        for c in calls:
+            assert c.kwargs["repo"] == "/wt"
+            assert c.kwargs["target"] == "run/abc"
+
+    def test_consolidate_reports_conflicts_without_raising(self, coord, mock_clawteam_client):
+        def merge(team, agent, *, repo, target):
+            return MagicMock(returncode=1 if agent == "b" else 0)
+        mock_clawteam_client.merge_workspace.side_effect = merge
+        conflicts = coord.consolidate(self._isolated_handle())
+        assert conflicts == ["b"]
+
+    def test_consolidate_noop_for_in_place(self, coord, mock_clawteam_client):
+        from datetime import datetime, timezone
+        handle = RunHandle(
+            run_id="run-1", team_name="team-1",
+            started_at=datetime.now(timezone.utc), topology=TopologyMode.SEQUENTIAL,
+        )  # run_branch is None
+        assert coord.consolidate(handle) == []
+        assert not mock_clawteam_client.merge_workspace.called
+
+
 class TestCoordinatorTemplateEmission:
     def test_installs_template_before_launch(self, coord, basic_spec):
         """Coordinator must register the template via install_template before
