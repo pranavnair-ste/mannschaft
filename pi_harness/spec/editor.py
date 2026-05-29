@@ -55,13 +55,13 @@ def _set_spec_status(spec_id: str, new_status: str) -> None:
     serialize_spec(Spec(**data), spec_path(spec_id))
 
 
-def _finalize_run(coordinator, handle, spec_id: str) -> None:
+def _finalize_run(coordinator, handle, spec_id: str, timeout: float = 1800.0) -> None:
     """Background-task body: wait for the team to terminate, run the improve
     loop + teardown via on_completion, and flip the spec to its post-run
     status. Errors are logged; they must not crash the FastAPI worker."""
     success = False
     try:
-        result = coordinator.wait_for_completion(handle)
+        result = coordinator.wait_for_completion(handle, timeout=timeout)
         success = bool(getattr(result, "success", False))
         coordinator.on_completion(handle)
     except Exception:
