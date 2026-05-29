@@ -79,12 +79,22 @@ class RunSpec:
 class RunHandle:
     """Returned by Coordinator.launch. Threaded into trajectory capture +
     post-completion improve scheduling. session_id is propagated from RunSpec
-    so the improve adapter can stamp corpus entries with the originating session."""
+    so the improve adapter can stamp corpus entries with the originating session.
+
+    Isolation state (Phase 2): when a run is isolated (the default), ``run_branch``
+    is the ``run/<id>`` branch all work lands on, ``workspace_repo`` is the path to
+    the dedicated run worktree ClawTeam was pointed at, and ``agent_names`` lists
+    leader+workers (consolidation order). ``keep_alive`` suppresses teardown on
+    failure so a failed team can be inspected live."""
     run_id: str
     team_name: str
     started_at: datetime
     topology: TopologyMode
     session_id: str | None = None
+    run_branch: str | None = None
+    workspace_repo: str | None = None
+    agent_names: list[str] = field(default_factory=list)
+    keep_alive: bool = False
 
 
 @dataclass
