@@ -13,6 +13,10 @@ from datetime import datetime, timezone
 
 import tomli_w
 
+from pathlib import Path
+
+from pi_harness.clawteam import git_workspace
+
 from pi_harness.corpus.format import Classification
 from pi_harness.clawteam import (
     ClawTeamClient,
@@ -86,7 +90,7 @@ class Coordinator:
         self._task_specs: dict[str, list] = {}        # run_id -> TaskDef list; reserved for downstream callers
         #   (e.g. dashboard / trajectory layers) to inspect the seeded DAG
 
-    def launch(self, spec: RunSpec) -> RunHandle:
+    def launch(self, spec: RunSpec, *, in_place: bool = False, keep_alive: bool = False) -> RunHandle:
         # Ensure the trajectory store exists before any capture write.
         from pi_harness.trajectory.store import init_db
         init_db(self._config.trajectory_db_path)
@@ -164,6 +168,23 @@ class Coordinator:
                 replace(pspec, command=wrapper_cmd_str)
             )
 
+        # 4c. Isolation (default): create a run/<id> worktree off HEAD and point
+        #     ClawTeam at it so per-agent worktrees fork off run/<id>; the user's
+        #     checked-out branch is never touched. --in-place opts out.
+        run_branch: str | None = None
+        workspace_repo: str | None = None
+        if not in_place:
+            repo = git_workspace.repo_root()
+            run_branch = f"run/{run_id[-8:]}"
+            wt_path = Path(self._config.clawteam_state_dir) / "run-worktrees" / run_id
+            git_workspace.create_run_worktree(repo, branch=run_branch, worktree_path=wt_path)
+            workspace_repo = str(wt_path)
+
+        # Capture agent names (leader + workers) for later consolidation.
+        agent_names = [leader_block["name"]] + [
+            a["name"] for a in template_dict["template"]["agents"]
+        ]
+
         # 5. Register template + launch team via Plan 1.
         self._clawteam_client.install_template(
             template_name, tomli_w.dumps(template_dict)
@@ -172,6 +193,8 @@ class Coordinator:
             template=template_name,
             team_name=team_name,
             goal=spec.goal,
+            workspace=workspace_repo is not None,
+            repo=workspace_repo,
         )
 
         # 6. Seed the task DAG. Order matters: a task referenced in `blocked_by`
@@ -191,6 +214,10 @@ class Coordinator:
             started_at=datetime.now(timezone.utc),
             topology=spec.mode,
             session_id=spec.session_id,
+            run_branch=run_branch,
+            workspace_repo=workspace_repo,
+            agent_names=agent_names,
+            keep_alive=keep_alive,
         )
         self._task_specs[run_id] = tasks
 

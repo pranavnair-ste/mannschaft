@@ -116,6 +116,37 @@ class TestCoordinatorLaunch:
         assert names.index("register_profile") < names.index("launch_team")
 
 
+class TestCoordinatorIsolation:
+    def test_launch_isolates_by_default(self, coord, basic_spec, mock_clawteam_client):
+        with patch("pi_harness.topology.coordinator.git_workspace") as gw:
+            gw.repo_root.return_value = __import__("pathlib").Path("/repo")
+            handle = coord.launch(basic_spec)
+        # A run worktree was created off HEAD on a run/<id> branch...
+        assert gw.create_run_worktree.called
+        assert handle.run_branch and handle.run_branch.startswith("run/")
+        assert handle.workspace_repo
+        # ...and ClawTeam was pointed at it with --workspace.
+        kwargs = mock_clawteam_client.launch_team.call_args.kwargs
+        assert kwargs["workspace"] is True
+        assert kwargs["repo"] == handle.workspace_repo
+        # Agent names captured for consolidation (leader + workers).
+        assert set(handle.agent_names) == {"a", "b"}
+
+    def test_launch_in_place_skips_isolation(self, coord, basic_spec, mock_clawteam_client):
+        with patch("pi_harness.topology.coordinator.git_workspace") as gw:
+            handle = coord.launch(basic_spec, in_place=True)
+        assert not gw.create_run_worktree.called
+        assert handle.run_branch is None
+        kwargs = mock_clawteam_client.launch_team.call_args.kwargs
+        assert kwargs.get("workspace", False) is False
+
+    def test_launch_propagates_keep_alive_to_handle(self, coord, basic_spec):
+        with patch("pi_harness.topology.coordinator.git_workspace") as gw:
+            gw.repo_root.return_value = __import__("pathlib").Path("/repo")
+            handle = coord.launch(basic_spec, keep_alive=True)
+        assert handle.keep_alive is True
+
+
 class TestCoordinatorSyncMode:
     def test_sync_all_rewrites_all_profiles(self, coord):
         spec = RunSpec(
