@@ -763,6 +763,19 @@ class TestCoordinatorBranch:
         child_spec = runspec_from_json(row["run_spec_json"])
         assert child_spec.mode.value == "parallel"
 
+    def test_branch_clears_child_spec_id_and_sets_lineage_once(self, coord, basic_spec):
+        """A branched child registers in a single insert with lineage, and its
+        spec_id is cleared (not silently inherited from the parent's spec) (#39)."""
+        from pi_harness.trajectory.runs import get_run
+
+        parent = self._register_parent(coord, basic_spec)
+        handle = coord.branch(parent, step_id="s-9", overrides={})
+        row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
+        assert row["spec_id"] is None
+        assert row["parent_run_id"] == parent
+        assert row["branch_from_step"] == "s-9"
+        assert row["status"] == "running"
+
     def test_branch_unknown_parent_raises(self, coord):
         with pytest.raises(ValueError, match="unknown parent run"):
             coord.branch("ghost", step_id="s-1", overrides={})

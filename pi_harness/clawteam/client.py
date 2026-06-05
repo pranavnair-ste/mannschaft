@@ -39,6 +39,12 @@ log = logging.getLogger(__name__)
 # when every task is "completed". "blocked" is transient (waiting on a dependency).
 TERMINAL_STATUSES = frozenset({"completed"})
 FAILURE_STATUSES: frozenset[str] = frozenset()
+# Statuses a task can still make progress from. If NONE of the board's tasks are
+# runnable (everything left is "blocked") for several consecutive polls, the run
+# is deadlocked: ClawTeam 0.2.x has no "failed" status, so without this a wedged
+# run would burn the ENTIRE timeout before being torn down (audit #13).
+RUNNABLE_STATUSES = frozenset({"pending", "in_progress"})
+DEFAULT_STALL_POLL_LIMIT = 12
 
 
 class ClawTeamCLIError(RuntimeError):
@@ -312,6 +318,7 @@ class ClawTeamClient:
         timeout: float,
         poll_interval: float = 5.0,
         on_poll: Optional[Callable[[List[Mapping[str, Any]]], None]] = None,
+        stall_poll_limit: int = DEFAULT_STALL_POLL_LIMIT,
     ) -> bool:
         """Block until every task on the board reaches a terminal status.
 
@@ -320,13 +327,16 @@ class ClawTeamClient:
         A raising callback is logged and ignored; it never aborts the wait.
 
         Returns:
-            ``True`` if all tasks finished cleanly within ``timeout``.
+            ``True`` if all tasks finished cleanly within ``timeout`` (an empty
+            board — a zero-task run — also returns ``True``).
 
         Raises:
-            ClawTeamRunFailure: If any task reaches a failure status.
+            ClawTeamRunFailure: If any task reaches a failure status, or the run
+                deadlocks (no runnable task for ``stall_poll_limit`` polls).
             ClawTeamTimeout: If ``timeout`` elapses before all tasks finish.
         """
         deadline = time.monotonic() + timeout
+        stall_polls = 0
         while True:
             tasks = self.list_tasks(team_name)
             if on_poll is not None:
@@ -334,17 +344,35 @@ class ClawTeamClient:
                     on_poll(tasks)
                 except Exception:  # noqa: BLE001 — capture must never break the wait
                     log.exception("wait_for_completion: on_poll callback failed")
-            if tasks:
-                failed = [t for t in tasks if t.get("status") in FAILURE_STATUSES]
-                if failed:
-                    failed_ids = ", ".join(
-                        str(t.get("task_id", t.get("id", "?"))) for t in failed
-                    )
+            if not tasks:
+                # Empty board: nothing to wait on. The harness seeds the DAG
+                # before waiting, so an empty board is a zero-task run — return
+                # rather than burning the whole timeout (audit #37).
+                return True
+            failed = [t for t in tasks if t.get("status") in FAILURE_STATUSES]
+            if failed:
+                failed_ids = ", ".join(
+                    str(t.get("task_id", t.get("id", "?"))) for t in failed
+                )
+                raise ClawTeamRunFailure(
+                    f"team={team_name!r} task(s) failed: {failed_ids}"
+                )
+            if all(t.get("status") in TERMINAL_STATUSES for t in tasks):
+                return True
+            # Deadlock detection: if no task is runnable (everything left is
+            # blocked) for stall_poll_limit consecutive polls, fail fast instead
+            # of waiting out the clock (audit #13). The persistence requirement
+            # avoids false positives from a task transiently blocked while its
+            # blocker is mid-flight.
+            if any(t.get("status") in RUNNABLE_STATUSES for t in tasks):
+                stall_polls = 0
+            else:
+                stall_polls += 1
+                if stall_polls >= stall_poll_limit:
                     raise ClawTeamRunFailure(
-                        f"team={team_name!r} task(s) failed: {failed_ids}"
+                        f"team={team_name!r} deadlocked: no runnable "
+                        f"(pending/in_progress) task for {stall_polls} consecutive polls"
                     )
-                if all(t.get("status") in TERMINAL_STATUSES for t in tasks):
-                    return True
             if time.monotonic() >= deadline:
                 raise ClawTeamTimeout(
                     f"team={team_name!r} did not finish within {timeout:.1f}s"

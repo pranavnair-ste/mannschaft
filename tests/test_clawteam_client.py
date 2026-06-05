@@ -308,6 +308,58 @@ def test_wait_for_completion_fails_when_status_in_failure_set(cfg, monkeypatch):
             client.wait_for_completion("my-team", timeout=1.0, poll_interval=0.01)
 
 
+def test_wait_for_completion_empty_board_returns_true(cfg):
+    """An empty board (zero-task run) returns immediately rather than burning the
+    whole timeout (audit #37)."""
+    from pi_harness.clawteam.client import ClawTeamClient
+
+    client = ClawTeamClient(cfg)
+    with patch.object(ClawTeamClient, "list_tasks", return_value=[]):
+        assert client.wait_for_completion("my-team", timeout=5.0, poll_interval=0.0) is True
+
+
+def test_wait_for_completion_fails_fast_on_deadlock(cfg):
+    """A board where nothing is runnable (all blocked) for stall_poll_limit polls
+    fails fast instead of waiting out the timeout (audit #13)."""
+    from pi_harness.clawteam.client import ClawTeamClient, ClawTeamRunFailure
+
+    stalled = [
+        {"id": "t1", "status": "blocked"},
+        {"id": "t2", "status": "completed"},
+    ]
+    client = ClawTeamClient(cfg)
+    with patch.object(ClawTeamClient, "list_tasks", return_value=stalled):
+        with pytest.raises(ClawTeamRunFailure, match="deadlock"):
+            client.wait_for_completion(
+                "my-team", timeout=5.0, poll_interval=0.0, stall_poll_limit=3
+            )
+
+
+def test_wait_for_completion_blocked_then_progress_does_not_false_stall(cfg):
+    """A transient all-blocked board must NOT trip the stall detector once a task
+    becomes runnable again (audit #13 — no false positives)."""
+    from pi_harness.clawteam.client import ClawTeamClient
+
+    boards = [
+        [{"id": "t1", "status": "blocked"}],       # stall=1
+        [{"id": "t1", "status": "blocked"}],       # stall=2
+        [{"id": "t1", "status": "in_progress"}],   # runnable -> reset
+        [{"id": "t1", "status": "completed"}],     # done
+    ]
+    calls = {"n": 0}
+
+    def _next(_team):
+        b = boards[min(calls["n"], len(boards) - 1)]
+        calls["n"] += 1
+        return b
+
+    client = ClawTeamClient(cfg)
+    with patch.object(ClawTeamClient, "list_tasks", side_effect=_next):
+        assert client.wait_for_completion(
+            "my-team", timeout=5.0, poll_interval=0.0, stall_poll_limit=3
+        ) is True
+
+
 def test_client_passes_data_dir_top_level(cfg):
     """Every invocation must pass --data-dir before the subcommand."""
     from pi_harness.clawteam.client import ClawTeamClient

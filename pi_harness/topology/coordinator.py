@@ -91,7 +91,16 @@ class Coordinator:
         self._task_specs: dict[str, list] = {}        # run_id -> TaskDef list; reserved for downstream callers
         #   (e.g. dashboard / trajectory layers) to inspect the seeded DAG
 
-    def launch(self, spec: RunSpec, *, in_place: bool = False, keep_alive: bool = False) -> RunHandle:
+    def launch(
+        self,
+        spec: RunSpec,
+        *,
+        in_place: bool = False,
+        keep_alive: bool = False,
+        parent_run_id: str | None = None,
+        branch_from_step: str | None = None,
+        overrides: dict | None = None,
+    ) -> RunHandle:
         # Ensure the trajectory store exists before any capture write.
         from pi_harness.trajectory.store import init_db
         init_db(self._config.trajectory_db_path)
@@ -176,7 +185,10 @@ class Coordinator:
         workspace_repo: str | None = None
         if not in_place:
             repo = git_workspace.repo_root()
-            run_branch = f"run/{run_id[-8:]}"
+            # Full uuid (not the last 8 chars): run/<id> branches are kept after
+            # teardown, so an 8-char suffix would eventually collide and fail the
+            # worktree creation (audit #38). run_id is "run-<uuid>".
+            run_branch = f"run/{run_id[4:]}"
             wt_path = Path(self._config.clawteam_state_dir) / "run-worktrees" / run_id
             git_workspace.create_run_worktree(repo, branch=run_branch, worktree_path=wt_path)
             workspace_repo = str(wt_path)
@@ -209,9 +221,14 @@ class Coordinator:
         try:
             # Register the run so the dashboard can list it with real status /
             # topology / lineage, and so branch can reload this RunSpec verbatim.
+            # Lineage is written in this SINGLE insert (branch() threads it in)
+            # rather than a second register_run — no window where the child row
+            # exists without its parent link. A branched child is not tied to the
+            # on-disk spec, so its spec_id is cleared rather than inherited (#39).
+            is_branch = parent_run_id is not None
             register_run(
                 run_id=run_id,
-                spec_id=spec.spec_id,
+                spec_id=None if is_branch else spec.spec_id,
                 topology=spec.mode.value,
                 sync_mode=spec.sync_mode.value,
                 session_id=spec.session_id,
@@ -220,6 +237,9 @@ class Coordinator:
                 started_at=handle.started_at,
                 run_spec_json=runspec_to_json(spec),
                 status="running",
+                parent_run_id=parent_run_id,
+                branch_from_step=branch_from_step,
+                overrides=overrides,
                 db_path=self._config.trajectory_db_path,
             )
 
@@ -277,12 +297,8 @@ class Coordinator:
         with a tweak (model_tier/topology/sync_mode/goal). The parent run must
         have been registered with a stored RunSpec.
         """
-        from pi_harness.topology.runspec_codec import (
-            apply_overrides,
-            runspec_from_json,
-            runspec_to_json,
-        )
-        from pi_harness.trajectory.runs import get_run, register_run
+        from pi_harness.topology.runspec_codec import apply_overrides, runspec_from_json
+        from pi_harness.trajectory.runs import get_run
 
         parent = get_run(parent_run_id, db_path=self._config.trajectory_db_path)
         if parent is None:
@@ -294,26 +310,13 @@ class Coordinator:
         if overrides:
             spec = apply_overrides(spec, overrides)
 
-        handle = self.launch(spec)  # registers the child as running
-
-        # Re-register to stamp lineage onto the freshly-created child row.
-        register_run(
-            run_id=handle.run_id,
-            spec_id=spec.spec_id,
-            topology=spec.mode.value,
-            sync_mode=spec.sync_mode.value,
-            session_id=spec.session_id,
-            goal=spec.goal,
-            team_name=handle.team_name,
-            started_at=handle.started_at,
-            run_spec_json=runspec_to_json(spec),
-            status="running",
+        # Launch registers the child ONCE, with lineage — no no-lineage window.
+        return self.launch(
+            spec,
             parent_run_id=parent_run_id,
             branch_from_step=step_id,
             overrides=overrides or {},
-            db_path=self._config.trajectory_db_path,
         )
-        return handle
 
     def wait_for_completion(self, handle: RunHandle, timeout: float) -> RunResult:
         """Block on Plan 1's wait_for_completion, capturing task transitions into
@@ -457,7 +460,7 @@ class Coordinator:
             team_name=row["team_name"],
             started_at=datetime.now(timezone.utc),
             topology=topology,
-            run_branch=f"run/{run_id[-8:]}",
+            run_branch=f"run/{run_id[4:]}",
             workspace_repo=str(
                 Path(self._config.clawteam_state_dir) / "run-worktrees" / run_id
             ),
