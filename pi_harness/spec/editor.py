@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import uuid
 from datetime import datetime, timezone
 
@@ -40,19 +41,28 @@ logger = logging.getLogger(__name__)
 # surface without duplicating handlers.
 router = APIRouter()
 
+# Serializes spec-file read-modify-write across the in-process request handlers
+# and the background launch finalizer, so the finalizer's status flip can't
+# clobber a concurrent user edit (and vice versa) — paired with the atomic
+# write in serialize_spec (audit #33).
+_SPEC_LOCK = threading.Lock()
+
 
 def _set_spec_status(spec_id: str, new_status: str) -> None:
     """Atomically rewrite a spec file with a new status. Used by the launch
-    finalizer; tolerant of a missing/changed-from-under-us spec file."""
-    try:
-        spec = parse_spec(spec_path(spec_id))
-    except Exception:
-        logger.exception("finalizer: failed to load spec %s for status update", spec_id)
-        return
-    data = spec.__dict__.copy()
-    data["status"] = new_status
-    data["updated_at"] = _now()
-    serialize_spec(Spec(**data), spec_path(spec_id))
+    finalizer; tolerant of a missing/changed-from-under-us spec file. Re-reads
+    fresh under the lock and updates only status/updated_at so concurrent field
+    edits survive."""
+    with _SPEC_LOCK:
+        try:
+            spec = parse_spec(spec_path(spec_id))
+        except Exception:
+            logger.exception("finalizer: failed to load spec %s for status update", spec_id)
+            return
+        data = spec.__dict__.copy()
+        data["status"] = new_status
+        data["updated_at"] = _now()
+        serialize_spec(Spec(**data), spec_path(spec_id))
 
 
 def _finalize_run(coordinator, handle, spec_id: str, timeout: float = 1800.0) -> None:
@@ -125,7 +135,11 @@ def _new_spec_id(title: str) -> str:
 
 
 def _load(spec_id: str) -> Spec:
-    path = spec_path(spec_id)
+    try:
+        path = spec_path(spec_id)
+    except ValueError as exc:
+        # Reject a malformed/traversing spec_id with 400, not a 500 (audit #30).
+        raise HTTPException(status_code=400, detail=str(exc))
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"spec {spec_id} not found")
     return parse_spec(path)
@@ -162,8 +176,11 @@ def list_specs() -> SpecList:
     for path in sorted(storage.glob("*.md")):
         try:
             specs.append(parse_spec(path))
-        except ValueError:
-            continue  # skip malformed files; don't take the whole list down
+        except Exception:
+            # Skip ANY unreadable/corrupt spec (bad YAML, missing field, etc.)
+            # rather than 500-ing the whole listing on one bad file (audit #31).
+            logger.warning("list_specs: skipping unreadable spec %s", path, exc_info=True)
+            continue
     return SpecList(specs=specs)
 
 
@@ -200,17 +217,20 @@ _DECOMPOSER_INPUT_FIELDS = frozenset(
 
 @router.put("/specs/{spec_id}", response_model=Spec)
 def update_spec(spec_id: str, body: UpdateSpecBody) -> Spec:
-    spec = _load(spec_id)
     patch = body.model_dump(exclude_unset=True)
-    data = spec.__dict__.copy()
-    data.update(patch)
-    data["updated_at"] = _now()
-    if _DECOMPOSER_INPUT_FIELDS & patch.keys():
-        data["status"] = "draft"
-        data["linter_score"] = None
-        data["decomposed_tasks"] = None
-    updated = Spec(**data)
-    serialize_spec(updated, spec_path(spec_id))
+    # Hold the lock across read+write so the background finalizer's status flip
+    # can't interleave and clobber this edit (audit #33).
+    with _SPEC_LOCK:
+        spec = _load(spec_id)
+        data = spec.__dict__.copy()
+        data.update(patch)
+        data["updated_at"] = _now()
+        if _DECOMPOSER_INPUT_FIELDS & patch.keys():
+            data["status"] = "draft"
+            data["linter_score"] = None
+            data["decomposed_tasks"] = None
+        updated = Spec(**data)
+        serialize_spec(updated, spec_path(spec_id))
     return updated
 
 

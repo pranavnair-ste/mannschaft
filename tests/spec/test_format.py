@@ -12,7 +12,28 @@ from pi_harness.spec.format import (
     serialize_spec,
     spec_storage_dir,
     spec_path,
+    validate_spec_id,
 )
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["..", ".", "../etc/passwd", "a/b", "foo/../bar", "with space", "x\\y", ""],
+)
+def test_spec_path_rejects_traversal_ids(bad, monkeypatch, tmp_path):
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    with pytest.raises(ValueError):
+        spec_path(bad)
+    with pytest.raises(ValueError):
+        validate_spec_id(bad)
+
+
+@pytest.mark.parametrize("good", ["spec-foo-abc123", "my_spec.v2", "A-B_c.1"])
+def test_spec_path_accepts_safe_slugs(good, monkeypatch, tmp_path):
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    p = spec_path(good)
+    assert p.parent == (tmp_path / "specs")
+    assert p.name == f"{good}.md"
 
 
 @pytest.fixture

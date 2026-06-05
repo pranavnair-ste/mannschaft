@@ -21,7 +21,7 @@ from typing import Optional
 import typer
 
 from pi_harness import __version__
-from pi_harness.spec.format import parse_spec_file, spec_storage_dir
+from pi_harness.spec.format import parse_spec_file, spec_path, spec_storage_dir
 from pi_harness.spec.runspec import build_coordinator, spec_to_runspec
 
 app = typer.Typer(
@@ -243,6 +243,15 @@ def _specs_dir() -> Path:
     return d
 
 
+def _spec_path_or_die(spec_id: str) -> Path:
+    """Validated spec path (rejects path-traversal / unsafe ids) or clean exit."""
+    try:
+        return spec_path(spec_id)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -254,7 +263,8 @@ def spec_new(
     force: bool = typer.Option(False, "--force", help="Overwrite if exists."),
 ) -> None:
     """Scaffold a new spec at ~/.pi-harness/specs/<id>.md."""
-    target = _specs_dir() / f"{spec_id}.md"
+    target = _spec_path_or_die(spec_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() and not force:
         typer.echo(f"error: {target} already exists (pass --force to overwrite)", err=True)
         raise typer.Exit(code=1)
@@ -278,7 +288,7 @@ def spec_ls() -> None:
 @spec_app.command("show")
 def spec_show(spec_id: str) -> None:
     """Print a spec file."""
-    target = _specs_dir() / f"{spec_id}.md"
+    target = _spec_path_or_die(spec_id)
     if not target.exists():
         typer.echo(f"error: {target} not found", err=True)
         raise typer.Exit(code=1)
@@ -291,7 +301,7 @@ def spec_rm(
     force: bool = typer.Option(False, "--force", help="Skip confirmation."),
 ) -> None:
     """Delete a spec file."""
-    target = _specs_dir() / f"{spec_id}.md"
+    target = _spec_path_or_die(spec_id)
     if not target.exists():
         typer.echo(f"error: {target} not found", err=True)
         raise typer.Exit(code=1)
@@ -305,7 +315,7 @@ def spec_rm(
 @spec_app.command("edit")
 def spec_edit(spec_id: str) -> None:
     """Open the spec in $EDITOR (falls back to vi)."""
-    target = _specs_dir() / f"{spec_id}.md"
+    target = _spec_path_or_die(spec_id)
     if not target.exists():
         typer.echo(f"error: {target} not found", err=True)
         raise typer.Exit(code=1)

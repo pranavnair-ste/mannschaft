@@ -11,6 +11,8 @@ fields. One ``Spec`` shape serves both the FastAPI editor and the CLI; the
 from __future__ import annotations
 
 import os
+import re
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -70,8 +72,37 @@ def spec_storage_dir() -> Path:
     return _home_dir() / "specs"
 
 
+# A spec_id becomes a filename, so it must be a single safe slug — no path
+# separators, no '.'/'..'. Without this, an attacker-supplied spec_id (CLI arg
+# or HTTP path param) could read/write/delete files outside the specs dir
+# (audit #12/#17/#30).
+_SPEC_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def validate_spec_id(spec_id: str) -> str:
+    """Return ``spec_id`` unchanged if it is a safe slug; else raise ValueError."""
+    if (
+        not isinstance(spec_id, str)
+        or spec_id in {".", ".."}
+        or _SPEC_ID_RE.fullmatch(spec_id) is None
+    ):
+        raise ValueError(
+            f"invalid spec_id {spec_id!r}: must match [A-Za-z0-9._-]+ "
+            "(no path separators, not '.'/'..')"
+        )
+    return spec_id
+
+
 def spec_path(spec_id: str) -> Path:
-    return spec_storage_dir() / f"{spec_id}.md"
+    """Resolve the on-disk path for ``spec_id``, validating it cannot escape the
+    specs directory (path traversal)."""
+    validate_spec_id(spec_id)
+    storage = spec_storage_dir()
+    path = storage / f"{spec_id}.md"
+    # Belt-and-suspenders: the resolved file must sit directly in the specs dir.
+    if path.resolve().parent != storage.resolve():
+        raise ValueError(f"spec_id {spec_id!r} escapes the specs directory")
+    return path
 
 
 def _build_body(spec: Spec) -> str:
@@ -97,7 +128,19 @@ def serialize_spec(spec: Spec, path: Path) -> None:
     yaml_block = yaml.safe_dump(frontmatter, sort_keys=True, default_flow_style=False)
     body = _build_body(spec)
     contents = f"{FRONTMATTER_DELIM}\n{yaml_block}{FRONTMATTER_DELIM}\n\n{body}"
-    path.write_text(contents, encoding="utf-8")
+    # Atomic write: a concurrent reader (dashboard/finalizer) never sees a torn
+    # file, and a crash mid-write can't corrupt an existing spec (audit #33).
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.stem}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(contents)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def parse_spec(path: Path) -> Spec:

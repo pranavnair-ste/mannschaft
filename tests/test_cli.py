@@ -252,6 +252,25 @@ def test_spec_new_refuses_existing(tmp_path, monkeypatch):
     assert result.exit_code != 0
 
 
+def test_spec_subcommands_reject_path_traversal(tmp_path, monkeypatch):
+    """A traversing spec_id must be rejected, not used to read/write/delete
+    files outside the specs dir (audit #17)."""
+    from pi_harness.cli import app
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    # Plant a file outside the specs dir that a traversal would target.
+    secret = tmp_path / "secret.md"
+    secret.write_text("top secret\n")
+    for cmd in (
+        ["spec", "rm", "../secret", "--force"],
+        ["spec", "show", "../secret"],
+        ["spec", "new", "../secret", "--title", "pwn", "--force"],
+    ):
+        result = runner.invoke(app, cmd)
+        assert result.exit_code == 2, (cmd, result.stdout)
+    # The outside file is untouched (not deleted, not overwritten).
+    assert secret.exists() and secret.read_text() == "top secret\n"
+
+
 def test_spec_ls_lists_existing(tmp_path, monkeypatch):
     from pi_harness.cli import app
     monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
