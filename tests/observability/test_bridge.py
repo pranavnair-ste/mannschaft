@@ -53,3 +53,32 @@ def test_event_id_is_deterministic():
     a = bridge.translate(ev, CTX, seq=1, row_id=42)
     b = bridge.translate(ev, CTX, seq=1, row_id=42)
     assert a["event_id"] == b["event_id"]   # idempotent re-tail
+
+
+def test_envelopes_for_run_synthesizes_session_and_turns():
+    rows = [
+        (1, _ev(agent_id="planner", classification="tool_call", tool="bash", step_id="c1", input={"command": "ls"})),
+        (2, _ev(agent_id="planner", classification="tool_result", tool="bash", step_id="c1",
+                output={"content": [{"type": "text", "text": "ok"}]})),
+        (3, _ev(agent_id="planner", classification="message", step_id="turn-1",
+                output={"cost_usd": 0.01, "stopReason": "stop", "text": "done", "thinking": ""})),
+    ]
+    envs = bridge.envelopes_for_run(rows, CTX)
+    types = [e["type"] for e in envs]
+    assert types == ["session_start", "turn_start", "tool_call", "tool_result",
+                     "assistant_message", "turn_end"]
+    # seq is monotonic per session starting at 0
+    assert [e["seq"] for e in envs] == [0, 1, 2, 3, 4, 5]
+    assert all(e["session_id"] == "run-x:planner" for e in envs)
+
+
+def test_envelopes_for_run_separates_agents():
+    rows = [
+        (1, _ev(agent_id="a1", classification="message", step_id="turn-1", output={"text": "x", "cost_usd": 0})),
+        (2, _ev(agent_id="a2", classification="message", step_id="turn-1", output={"text": "y", "cost_usd": 0})),
+    ]
+    envs = bridge.envelopes_for_run(rows, CTX)
+    a1 = [e for e in envs if e["session_id"] == "run-x:a1"]
+    a2 = [e for e in envs if e["session_id"] == "run-x:a2"]
+    assert [e["seq"] for e in a1] == [0, 1, 2, 3]  # session_start, turn_start, msg, turn_end
+    assert [e["seq"] for e in a2] == [0, 1, 2, 3]

@@ -110,3 +110,48 @@ def translate(ev: TrajectoryEvent, ctx: RunContext, *, seq: int, row_id: int = 0
     eid = _eid(ctx, ev.agent_id, "custom", row_id, ev.classification)
     return _base(ev, ctx, "custom", seq, eid, {
         "custom_type": ev.classification, "data": {"input": dict(ev.input), "output": out}})
+
+
+def _synth(ctx: RunContext, agent_id: str, ts, etype: str, seq: int, kind: str, payload: dict) -> dict:
+    eid = str(uuid.uuid5(_NS, ":".join((ctx.run_id, agent_id, kind))))
+    fake = TrajectoryEvent(run_id=ctx.run_id, agent_id=agent_id, step_id="", ts=ts,
+                           model="", tool="", input={}, output={}, duration_ms=0,
+                           tokens_in=0, tokens_out=0, outcome="success", classification="message")
+    env = _base(fake, ctx, etype, seq, eid, payload)
+    return env
+
+
+def envelopes_for_run(rows: list[tuple[int, TrajectoryEvent]], ctx: RunContext) -> list[dict]:
+    """Ordered envelopes for a whole run. Per agent: one session_start, then
+    turn_start/<events>/turn_end groups. seq is monotonic per session from 0.
+    Deterministic — recomputable on restart (idempotent against the fork)."""
+    seq: dict[str, int] = {}
+    started: set[str] = set()
+    turn_open: dict[str, bool] = {}
+    turn_idx: dict[str, int] = {}
+    out: list[dict] = []
+
+    def nxt(sid: str) -> int:
+        n = seq.get(sid, 0)
+        seq[sid] = n + 1
+        return n
+
+    for row_id, ev in rows:
+        sid = f"{ctx.run_id}:{ev.agent_id}"
+        if sid not in started:
+            started.add(sid)
+            turn_open[sid] = False
+            turn_idx[sid] = 1
+            out.append(_synth(ctx, ev.agent_id, ev.ts, "session_start", nxt(sid),
+                              "session", {"reason": "new"}))
+        if not turn_open[sid]:
+            out.append(_synth(ctx, ev.agent_id, ev.ts, "turn_start", nxt(sid),
+                              f"turn:{turn_idx[sid]}:start", {"turn_index": turn_idx[sid]}))
+            turn_open[sid] = True
+        out.append(translate(ev, ctx, seq=nxt(sid), row_id=row_id))
+        if ev.classification == "message":
+            out.append(_synth(ctx, ev.agent_id, ev.ts, "turn_end", nxt(sid),
+                              f"turn:{turn_idx[sid]}:end", {"turn_index": turn_idx[sid]}))
+            turn_open[sid] = False
+            turn_idx[sid] += 1
+    return out
