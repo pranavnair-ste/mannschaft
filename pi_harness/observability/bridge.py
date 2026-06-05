@@ -5,15 +5,22 @@ against the fork's event_id PK + UNIQUE(session_id, seq)."""
 from __future__ import annotations
 
 import json
+import os
+import urllib.request
 import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from pi_harness.trajectory import runs as runs_mod
+from pi_harness.trajectory import store as store_mod
 from pi_harness.trajectory.schema import TrajectoryEvent
 
 # Fixed namespace so event_ids are stable across processes/restarts.
 _NS = uuid.UUID("6f0d8a4e-0c2b-4e8a-9b1a-7c2d3e4f5a6b")
 MAX_TEXT = 32_000  # fork MAX_TEXT_FIELD / MAX_RESULT_BYTES
+
+DEFAULT_URL = os.environ.get("OBS_SERVER_URL", "http://127.0.0.1:43190")
+DEFAULT_TOKEN = os.environ.get("OBS_AUTH_TOKEN", "devtoken")
 
 
 @dataclass(frozen=True)
@@ -155,3 +162,32 @@ def envelopes_for_run(rows: list[tuple[int, TrajectoryEvent]], ctx: RunContext) 
             turn_open[sid] = False
             turn_idx[sid] += 1
     return out
+
+
+def post_events(envelopes: list[dict], url: str, token: str) -> dict:
+    """POST a batch to the fork's /events. Caller batches to <=50."""
+    req = urllib.request.Request(
+        f"{url}/events", data=json.dumps(envelopes).encode(), method="POST",
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(req) as resp:
+        return json.load(resp)
+
+
+def _read_rows(run_id: str, db_path=None) -> list[tuple[int, TrajectoryEvent]]:
+    return store_mod.query_events_after(run_id, 0, db_path=db_path)
+
+
+def _load_run_context(run_id: str, db_path=None) -> RunContext:
+    rec = runs_mod.get_run(run_id, db_path=db_path) or {}
+    return RunContext(run_id=run_id, team_name=rec.get("team_name"), topology=rec.get("topology"))
+
+
+def backfill_run(run_id: str, *, url: str = DEFAULT_URL, token: str = DEFAULT_TOKEN,
+                 db_path=None) -> int:
+    """Translate ALL rows of run_id and POST them (batches of 50). Idempotent."""
+    ctx = _load_run_context(run_id, db_path=db_path)
+    rows = _read_rows(run_id, db_path=db_path)
+    envs = envelopes_for_run(rows, ctx)
+    for i in range(0, len(envs), 50):
+        post_events(envs[i:i + 50], url, token)
+    return len(envs)

@@ -82,3 +82,17 @@ def test_envelopes_for_run_separates_agents():
     a2 = [e for e in envs if e["session_id"] == "run-x:a2"]
     assert [e["seq"] for e in a1] == [0, 1, 2, 3]  # session_start, turn_start, msg, turn_end
     assert [e["seq"] for e in a2] == [0, 1, 2, 3]
+
+
+def test_backfill_run_reads_store_and_posts(monkeypatch):
+    posted = []
+    monkeypatch.setattr(bridge, "post_events",
+                        lambda envs, url, token: posted.extend(envs) or {"ingested": len(envs)})
+    monkeypatch.setattr(bridge, "_load_run_context",
+                        lambda run_id, db_path=None: CTX)
+    rows = [(1, _ev(agent_id="planner", classification="message", step_id="turn-1",
+                    output={"text": "hi", "cost_usd": 0}))]
+    monkeypatch.setattr(bridge, "_read_rows", lambda run_id, db_path=None: rows)
+    n = bridge.backfill_run("run-x", url="http://x", token="t")
+    assert n == 4  # session_start, turn_start, assistant_message, turn_end
+    assert posted[0]["type"] == "session_start"
