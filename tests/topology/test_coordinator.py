@@ -414,6 +414,25 @@ class TestCoordinatorTeardown:
         assert mock_clawteam_client.kill_tmux_session.called
         assert mock_clawteam_client.cleanup_team.called
 
+    def test_teardown_removes_worktree_even_if_cleanup_team_raises(
+        self, coord, basic_spec, mock_clawteam_client
+    ):
+        """An early launch failure (before the team exists) must still remove the
+        run worktree even though cleanup_team raises on the missing team — each
+        teardown step is independent/best-effort (verification follow-up)."""
+        from pi_harness.clawteam import ClawTeamCLIError
+
+        mock_clawteam_client.install_template.side_effect = RuntimeError("install boom")
+        mock_clawteam_client.cleanup_team.side_effect = ClawTeamCLIError(
+            ["clawteam", "team", "cleanup"], 1, "no such team"
+        )
+        with patch("pi_harness.topology.coordinator.git_workspace") as gw:
+            gw.repo_root.return_value = __import__("pathlib").Path("/repo")
+            with pytest.raises(RuntimeError, match="install boom"):
+                coord.launch(basic_spec)
+            # cleanup_team raised, but teardown still reached worktree removal.
+            assert gw.remove_run_worktree.called
+
 
 class TestCoordinatorConsolidate:
     def _isolated_handle(self):

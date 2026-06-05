@@ -52,6 +52,13 @@ def validate_local_url(url: str) -> str:
         raise ValueError(f"cannot resolve host {host!r}") from exc
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
+        # Unwrap an IPv4-mapped IPv6 address (::ffff:a.b.c.d) and classify the
+        # EMBEDDED IPv4 — ipaddress reports the mapped form as generically
+        # private (not loopback/link-local), which would let ::ffff:169.254.169.254
+        # (cloud metadata) or ::ffff:8.8.8.8 (public) slip through on a dual-stack
+        # host, defeating the guard below.
+        if ip.version == 6 and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
         if ip.is_unspecified:
             raise ValueError("local model URL resolves to an unspecified address")
         if ip.is_loopback:

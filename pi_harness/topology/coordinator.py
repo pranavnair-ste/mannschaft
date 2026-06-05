@@ -428,8 +428,19 @@ class Coordinator:
         credit), then removes the team record, then the worktree. Safe to call
         repeatedly.
         """
-        self._clawteam_client.kill_tmux_session(handle.team_name)
-        self._clawteam_client.cleanup_team(handle.team_name)
+        # Each step is best-effort and independent so a failure in one never
+        # skips the others. In particular cleanup_team uses check=True and can
+        # raise (e.g. on a half-launched run where the team was never created),
+        # which previously skipped the run-worktree removal below and leaked it.
+        # Kill the tmux session first (that's what stops the credit burn).
+        try:
+            self._clawteam_client.kill_tmux_session(handle.team_name)
+        except Exception:  # noqa: BLE001 — teardown must never raise
+            pass
+        try:
+            self._clawteam_client.cleanup_team(handle.team_name)
+        except Exception:  # noqa: BLE001 — teardown must never raise
+            pass
         if handle.workspace_repo:
             try:
                 git_workspace.remove_run_worktree(

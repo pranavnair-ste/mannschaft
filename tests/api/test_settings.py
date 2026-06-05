@@ -156,6 +156,8 @@ def test_local_models_returns_empty_when_server_unreachable(client, monkeypatch)
         "http://169.254.169.254/v1",  # cloud metadata (link-local)
         "http://8.8.8.8/v1",          # public / global
         "ftp://localhost/v1",         # wrong scheme
+        "http://[::ffff:169.254.169.254]/v1",  # IPv4-mapped metadata (must unwrap)
+        "http://[::ffff:8.8.8.8]/v1",          # IPv4-mapped public (must unwrap)
     ],
 )
 def test_local_models_rejects_ssrf_targets(client, bad_url):

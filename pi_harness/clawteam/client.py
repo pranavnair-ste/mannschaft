@@ -43,6 +43,12 @@ FAILURE_STATUSES: frozenset[str] = frozenset()
 # runnable (everything left is "blocked") for several consecutive polls, the run
 # is deadlocked: ClawTeam 0.2.x has no "failed" status, so without this a wedged
 # run would burn the ENTIRE timeout before being torn down (audit #13).
+#
+# SCOPE: this catches a *blocked* deadlock (nothing pending/in_progress). It does
+# NOT catch a task stuck "in_progress" because its agent hung or died — by task
+# status alone that is indistinguishable from a legitimately long-running task,
+# so flagging it would false-kill real work. The hard ``timeout`` bounds that
+# case; detecting it properly needs agent-process/liveness signals (future work).
 RUNNABLE_STATUSES = frozenset({"pending", "in_progress"})
 DEFAULT_STALL_POLL_LIMIT = 12
 
