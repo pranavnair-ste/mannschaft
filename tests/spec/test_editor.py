@@ -1,6 +1,7 @@
 """HTTP tests for the spec editor FastAPI app."""
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -10,6 +11,29 @@ from fastapi.testclient import TestClient
 from pi_harness.spec.decomposer import DecomposedTask
 from pi_harness.spec.editor import app, get_coordinator, get_decomposer
 from pi_harness.topology.base import RunSpec
+
+
+def test_patch_spec_applies_on_latest_disk_state(tmp_path, monkeypatch):
+    """_patch_spec re-reads fresh under the lock, so a mutator only overwrites
+    the fields it changes — a concurrent writer's status flip (e.g. the launch
+    finalizer) survives instead of being clobbered by a stale snapshot (#33)."""
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    from pi_harness.spec import editor
+    from pi_harness.spec.format import Spec, parse_spec, serialize_spec, spec_path
+
+    spec = Spec(
+        id="s1", title="orig", goal="g", acceptance_criteria=[], constraints=[],
+        non_goals=[], created_at="t", updated_at="t", linter_score=None, status="draft",
+    )
+    serialize_spec(spec, spec_path("s1"))
+    # Simulate a concurrent writer (the finalizer) flipping status on disk.
+    serialize_spec(replace(spec, status="running"), spec_path("s1"))
+
+    # A mutator that changes ONLY the title must NOT revert status to draft.
+    result = editor._patch_spec("s1", lambda d: {**d, "title": "patched"})
+    assert result.title == "patched"
+    assert result.status == "running"  # the concurrent flip survived
+    assert parse_spec(spec_path("s1")).status == "running"
 
 
 @pytest.fixture
