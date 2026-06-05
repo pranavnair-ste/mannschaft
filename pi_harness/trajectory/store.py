@@ -91,7 +91,9 @@ VALUES
 
 def _resolve_db_path(db_path: Path | str | None) -> Path:
     if db_path is not None:
-        return Path(db_path)
+        # expanduser so an ad-hoc caller passing the documented default *string*
+        # ("~/.pi-harness/trajectory.db") writes to $HOME, not a literal ./~ dir.
+        return Path(db_path).expanduser()
     # Fallback for callers that don't pass a path. The harness's normal entry
     # points (capture pipelines, API) always pass Config.trajectory_db_path
     # explicitly; this default exists so tools and ad-hoc scripts work too.
