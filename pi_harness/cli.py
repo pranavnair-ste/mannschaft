@@ -156,10 +156,21 @@ def launch(
         typer.echo(f"  isolated on branch: {handle.run_branch}")
 
     if detach:
+        typer.echo(f"  detached — stop it with: pi-harness stop {handle.run_id}")
         return
 
-    result = coord.wait_for_completion(handle, timeout=timeout)
-    coord.on_completion(handle)
+    try:
+        result = coord.wait_for_completion(handle, timeout=timeout)
+        coord.on_completion(handle)
+    except BaseException:
+        # Ctrl-C or any failure during the wait/finalize must not leave a live
+        # team burning credit or a leaked worktree (audit #4). Best-effort
+        # teardown, then re-raise so the original error/interrupt surfaces.
+        try:
+            coord.teardown(handle)
+        except Exception:
+            pass
+        raise
     for task_id, status in sorted(result.terminal_statuses.items()):
         typer.echo(f"  task={task_id} status={status}")
     if result.success and handle.run_branch:
@@ -167,6 +178,22 @@ def launch(
     if not result.success:
         typer.echo("run did not complete successfully", err=True)
         raise typer.Exit(code=1)
+
+
+@app.command()
+def stop(
+    run_id: str = typer.Argument(..., help="Run id to stop (printed by `launch`)."),
+) -> None:
+    """Stop a run: kill its agents (halting credit burn) and clean up its team
+    and run worktree. Use this for a --detach'd run, or to recover after Ctrl-C."""
+    from pi_harness.config import load_config
+
+    cfg = load_config()
+    coord = _make_coordinator(cfg)
+    if not coord.stop(run_id):
+        typer.echo(f"error: unknown run {run_id!r}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"stopped {run_id}")
 
 
 # --------------------------------------------------------------------------- #

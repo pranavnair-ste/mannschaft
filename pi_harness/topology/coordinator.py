@@ -435,6 +435,41 @@ class Coordinator:
             except Exception:  # noqa: BLE001 — teardown must never raise
                 pass
 
+    def stop(self, run_id: str) -> bool:
+        """Tear down a (possibly detached) run by id: kill its team to stop the
+        credit burn and remove its run worktree, then mark it cancelled.
+
+        Reconstructs the worktree path deterministically (it is always
+        ``clawteam_state_dir/run-worktrees/<run_id>``); ``remove_run_worktree``
+        no-ops if the run was launched ``--in-place`` (no worktree). Returns
+        False if ``run_id`` is unknown. Safe to call repeatedly.
+        """
+        from pi_harness.trajectory.runs import get_run, mark_run_status
+
+        row = get_run(run_id, db_path=self._config.trajectory_db_path)
+        if row is None:
+            return False
+        topology = (
+            TopologyMode(row["topology"]) if row.get("topology") else TopologyMode.SEQUENTIAL
+        )
+        handle = RunHandle(
+            run_id=run_id,
+            team_name=row["team_name"],
+            started_at=datetime.now(timezone.utc),
+            topology=topology,
+            run_branch=f"run/{run_id[-8:]}",
+            workspace_repo=str(
+                Path(self._config.clawteam_state_dir) / "run-worktrees" / run_id
+            ),
+        )
+        self.teardown(handle)
+        mark_run_status(
+            run_id, "cancelled",
+            ended_at=datetime.now(timezone.utc),
+            db_path=self._config.trajectory_db_path,
+        )
+        return True
+
     def consolidate(self, handle: RunHandle) -> list[str]:
         """Merge each agent's branch into the run branch (default target).
 

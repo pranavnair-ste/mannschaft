@@ -389,6 +389,20 @@ class TestCoordinatorTeardown:
         assert "did not merge cleanly" in err and loser in err
         mock_clawteam_client.kill_tmux_session.assert_called_once()
 
+    def test_stop_tears_down_known_run(self, coord, basic_spec, mock_clawteam_client):
+        """stop(run_id) halts a (detached) run: kills its team + marks cancelled."""
+        from pi_harness.trajectory.runs import get_run
+
+        handle = coord.launch(basic_spec)
+        assert coord.stop(handle.run_id) is True
+        mock_clawteam_client.kill_tmux_session.assert_called_with(handle.team_name)
+        mock_clawteam_client.cleanup_team.assert_called_with(handle.team_name)
+        row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
+        assert row["status"] == "cancelled"
+
+    def test_stop_unknown_run_returns_false(self, coord):
+        assert coord.stop("run-does-not-exist") is False
+
     def test_launch_tears_down_on_create_task_failure(
         self, coord, basic_spec, mock_clawteam_client
     ):
