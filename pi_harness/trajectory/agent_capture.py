@@ -25,6 +25,14 @@ from typing import Callable, Iterable, Iterator
 from pi_harness.trajectory.schema import TrajectoryEvent
 
 
+# message_update sub-types (assistantMessageEvent.type) that mark the first
+# output token for TTFT. Tool-call deltas are excluded per the design (timing is
+# about prose/reasoning generation).
+_CONTENT_DELTAS: frozenset[str] = frozenset(
+    {"text_start", "text_delta", "thinking_start", "thinking_delta"}
+)
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -78,6 +86,11 @@ class PiEventParser:
         self._now = now_fn
         self._current_model: str = ""
         self._turn_index: int = 0
+        # Per-turn timing state. pi events carry no per-event ts, so now_fn()
+        # stamps the wall-clock arrival of turn_start and the first content delta;
+        # _turn_message diffs them against turn_end to derive TTFT/generation/tps.
+        self._turn_start_t: datetime | None = None
+        self._first_delta_t: datetime | None = None
 
     def feed(self, line: str) -> Iterator[TrajectoryEvent]:
         """Parse one line. Invalid JSON / unknown events yield nothing."""
@@ -97,6 +110,11 @@ class PiEventParser:
             return
         if event_type == "turn_start":
             self._turn_index += 1
+            self._turn_start_t = self._now()
+            self._first_delta_t = None
+            return
+        if event_type == "message_update":
+            self._note_delta(event)
             return
         if event_type == "tool_execution_start":
             yield self._tool_call(event)
@@ -109,7 +127,18 @@ class PiEventParser:
             if ev is not None:
                 yield ev
             return
-        # session / agent_start / agent_end / message_update / message_end -> skip
+        # session / agent_start / agent_end / message_end -> skip
+
+    def _note_delta(self, event: dict) -> None:
+        """Record the wall-clock arrival of the FIRST text/thinking delta in the
+        current turn (for TTFT). Cheap: returns immediately once latched, so the
+        ~hundred message_update events per turn don't each call now_fn()."""
+        if self._first_delta_t is not None:
+            return
+        ame = event.get("assistantMessageEvent")
+        sub = ame.get("type") if isinstance(ame, dict) else None
+        if sub in _CONTENT_DELTAS:
+            self._first_delta_t = self._now()
 
     def _latch_model(self, event: dict) -> None:
         msg = event.get("message") or {}
@@ -163,27 +192,53 @@ class PiEventParser:
         # Coerce defensively: a malformed usage/cost number from pi must not
         # raise and abort the whole capture stream (audit #29).
         text, thinking = _assistant_text_and_thinking(msg)
-        return TrajectoryEvent(
+        now = self._now()
+        tokens_out = _safe_int(usage.get("output", 0))
+        output = {
+            "cost_usd": _safe_float(cost),
+            "stopReason": msg.get("stopReason"),
+            "responseId": msg.get("responseId"),
+            "text": text,
+            "thinking": thinking,
+        }
+        output.update(self._turn_timing(end=now, tokens_out=tokens_out))
+        ev = TrajectoryEvent(
             run_id=self.run_id,
             agent_id=self.agent_id,
             step_id=f"turn-{self._turn_index}",
-            ts=self._now(),
+            ts=now,
             model=str(msg.get("model", "") or self._current_model),
             tool="",
             input={},
-            output={
-                "cost_usd": _safe_float(cost),
-                "stopReason": msg.get("stopReason"),
-                "responseId": msg.get("responseId"),
-                "text": text,
-                "thinking": thinking,
-            },
+            output=output,
             duration_ms=0,
             tokens_in=_safe_int(usage.get("input", 0)),
-            tokens_out=_safe_int(usage.get("output", 0)),
+            tokens_out=tokens_out,
             outcome="success",
             classification="message",
         )
+        # Reset per-turn timing so a stray turn_end can't reuse a stale start.
+        self._turn_start_t = None
+        self._first_delta_t = None
+        return ev
+
+    def _turn_timing(self, *, end: datetime, tokens_out: int) -> dict:
+        """TTFT (prefill_ms), generation_ms, output_tps, and total latency_ms for
+        the turn, from the latched wall-clock arrivals. Returns {} when no
+        turn_start was seen; omits prefill/generation/tps when no content delta
+        arrived (e.g. a tool-only turn). Never raises."""
+        start = self._turn_start_t
+        if start is None:
+            return {}
+        timing: dict = {"latency_ms": round((end - start).total_seconds() * 1000)}
+        first = self._first_delta_t
+        if first is not None:
+            gen_ms = (end - first).total_seconds() * 1000
+            timing["prefill_ms"] = round((first - start).total_seconds() * 1000)
+            timing["generation_ms"] = round(gen_ms)
+            if gen_ms > 0 and tokens_out > 0:
+                timing["output_tps"] = round(tokens_out / (gen_ms / 1000), 2)
+        return timing
 
 
 def events_from_stream(

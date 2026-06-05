@@ -42,6 +42,27 @@ def test_translate_message_carries_prose():
     assert env["payload"]["stop_reason"] == "stop"
 
 
+def test_translate_message_forwards_timing():
+    """Per-turn timing captured into output (latency/TTFT/gen/tps) is forwarded
+    onto the assistant_message so the fork shows it (it already renders latency_ms)."""
+    ev = _ev(classification="message", step_id="turn-1", tokens_in=10, tokens_out=100,
+             output={"text": "hi", "cost_usd": 0, "latency_ms": 2500,
+                     "prefill_ms": 500, "generation_ms": 2000, "output_tps": 50.0})
+    p = bridge.translate(ev, CTX, seq=1)["payload"]
+    assert p["latency_ms"] == 2500
+    assert p["prefill_ms"] == 500
+    assert p["generation_ms"] == 2000
+    assert p["output_tps"] == 50.0
+
+
+def test_translate_message_omits_absent_timing():
+    """Runs captured before timing (or tool-only turns) carry no timing fields —
+    don't emit null noise."""
+    ev = _ev(classification="message", step_id="turn-1", output={"text": "hi", "cost_usd": 0})
+    p = bridge.translate(ev, CTX, seq=1)["payload"]
+    assert "latency_ms" not in p and "prefill_ms" not in p and "output_tps" not in p
+
+
 def test_translate_tool_result_extracts_text_and_error():
     ev = _ev(classification="tool_result", tool="bash", step_id="call_1", outcome="error",
              output={"content": [{"type": "text", "text": "boom"}]})

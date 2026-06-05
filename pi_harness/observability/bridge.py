@@ -143,7 +143,7 @@ def translate(ev: TrajectoryEvent, ctx: RunContext, *, seq: int, row_id: int = 0
         text = out.get("text", "")
         thinking = out.get("thinking", "")
         stop = out.get("stopReason")
-        return _base(ev, ctx, "assistant_message", seq, eid, {
+        payload = {
             "text": _truncate(text if isinstance(text, str) else ""),
             "thinking": _truncate(thinking if isinstance(thinking, str) else ""),
             "tool_call_ids": [],
@@ -151,7 +151,14 @@ def translate(ev: TrajectoryEvent, ctx: RunContext, *, seq: int, row_id: int = 0
             "usage": {"input": _as_int(ev.tokens_in), "output": _as_int(ev.tokens_out),
                       "cache_read": 0, "cache_write": 0,
                       "total_tokens": _as_int(ev.tokens_in) + _as_int(ev.tokens_out),
-                      "cost_total": _as_float(out.get("cost_usd", 0.0))}})
+                      "cost_total": _as_float(out.get("cost_usd", 0.0))}}
+        # Forward per-turn timing when present (capture omits it on old runs /
+        # tool-only turns). Numeric-guard since output is JSON from SQLite.
+        for key in ("latency_ms", "prefill_ms", "generation_ms", "output_tps"):
+            val = out.get(key)
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                payload[key] = val
+        return _base(ev, ctx, "assistant_message", seq, eid, payload)
     # task_transition / guide_fired / sensor_fired -> custom
     eid = _eid(ctx, ev.agent_id, "custom", row_id, ev.classification)
     return _base(ev, ctx, "custom", seq, eid, {
