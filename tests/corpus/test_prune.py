@@ -507,3 +507,45 @@ def test_prune_by_dedup_no_action_for_distinct_entries() -> None:
             last_updated_at=now,
         )
         assert prune_by_dedup([a, b], now=now) == []
+
+
+def test_prune_by_dedup_never_merges_empty_or_short_bodies() -> None:
+    """Empty/whitespace/near-empty bodies are non-comparable and must never be
+    auto-merged (which would archive one of them) — they previously scored
+    jaccard=1.0 (audit #34)."""
+    from pi_harness.corpus.format import Classification
+    from pi_harness.corpus.prune import prune_by_dedup
+
+    with freeze_time("2026-05-25T00:00:00Z"):
+        now = datetime.now(timezone.utc)
+        empty1 = _make_entry(classification=Classification.TACTICAL, body="   ", last_updated_at=now)
+        empty2 = _make_entry(classification=Classification.TACTICAL, body="", last_updated_at=now)
+        short1 = _make_entry(classification=Classification.TACTICAL, body="two words", last_updated_at=now)
+        short2 = _make_entry(classification=Classification.TACTICAL, body="two words", last_updated_at=now)
+        assert prune_by_dedup([empty1, empty2, short1, short2], now=now) == []
+
+
+def test_prune_by_staleness_keeps_entry_referenced_by_newest_run() -> None:
+    """recent_run_ids is newest-first; an entry referenced by the NEWEST run
+    must stay, while one referenced only by a run outside the window archives
+    (audit #11 — the window was inverted, archiving live knowledge)."""
+    from pi_harness.corpus.format import Classification
+    from pi_harness.corpus.prune import PruneActionType, prune_by_staleness
+
+    now = datetime(2026, 5, 25, tzinfo=timezone.utc)
+    runs_desc = ["run-new", "run-mid", "run-old1", "run-old2"]  # newest-first
+
+    fresh = _make_entry(
+        classification=Classification.TACTICAL,
+        last_referenced_run_id="run-new",
+        last_updated_at=now,
+    )
+    assert prune_by_staleness(fresh, now, recent_run_ids=runs_desc, tactical_recent_k=2) == []
+
+    stale = _make_entry(
+        classification=Classification.TACTICAL,
+        last_referenced_run_id="run-old2",  # outside the 2-run window
+        last_updated_at=now,
+    )
+    actions = prune_by_staleness(stale, now, recent_run_ids=runs_desc, tactical_recent_k=2)
+    assert any(a.action == PruneActionType.ARCHIVE for a in actions)

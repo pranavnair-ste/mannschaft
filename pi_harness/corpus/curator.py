@@ -17,6 +17,8 @@ Everything is pure-code; no LLM calls.
 
 from __future__ import annotations
 
+import fcntl
+import functools
 import logging
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -58,6 +60,33 @@ _LOGGER = logging.getLogger(__name__)
 
 # 90-day archive grace before hard delete.
 DEFAULT_ARCHIVE_GRACE_DAYS = 90
+
+
+def _with_repo_lock(method):
+    """Serialize an entire curator pass behind an exclusive file lock on the
+    corpus root.
+
+    The writer gate (writer._GATE_DEPTH) only flags 'inside a curator context';
+    it does NOT serialize two concurrent passes. The dashboard schedules curator
+    work from per-run BackgroundTasks, so overlapping runs can drive two
+    apply_candidates against the same corpus git repo at once — and GitPython's
+    add+commit is not safe under concurrency (one pass can stage files mid-write
+    of another, corrupting the index or losing an audit commit). An flock held
+    for the whole pass makes them run one-at-a-time per corpus root (audit #32).
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        self.root.mkdir(parents=True, exist_ok=True)
+        lock_path = self.root / ".curator.lock"
+        with open(lock_path, "w") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +231,7 @@ class Curator:
     # Public entry point
     # ------------------------------------------------------------------
 
+    @_with_repo_lock
     def apply_candidates(
         self,
         run_id: str,
@@ -342,6 +372,7 @@ class Curator:
         else:  # pragma: no cover
             raise ValueError(f"Unknown CandidateUpdate.kind={update.kind!r}")
 
+    @_with_repo_lock
     def restore_archived(self, entry_id: str, now: Optional[datetime] = None) -> CorpusEntry:
         """Un-archive an entry: move it from ``archived/`` back to its active
         classification dir and commit. Mirrors the archive path in reverse.
