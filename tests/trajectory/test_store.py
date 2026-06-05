@@ -244,3 +244,15 @@ def test_init_db_from_config_uses_config_path(tmp_path, monkeypatch):
     created = store_mod.init_db_from_config()
     assert created == target
     assert target.exists()
+
+
+def test_resolve_db_path_expands_tilde_string():
+    """A literal "~/..." string must resolve under $HOME, not create a ./~ dir
+    (the documented default trajectory_db_path is a tilde string)."""
+    from pi_harness.trajectory.store import _resolve_db_path
+
+    resolved = _resolve_db_path("~/.pi-harness/trajectory.db")
+    assert resolved == Path.home() / ".pi-harness" / "trajectory.db"
+    assert "~" not in str(resolved)
+    # absolute / Path inputs pass through unchanged
+    assert _resolve_db_path("/tmp/x/traj.db") == Path("/tmp/x/traj.db")

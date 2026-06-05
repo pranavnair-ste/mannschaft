@@ -196,6 +196,32 @@ def stop(
     typer.echo(f"stopped {run_id}")
 
 
+@app.command()
+def observe(
+    run: str = typer.Option(..., "--run", help="run_id to backfill/replay into the observability fork."),
+    url: Optional[str] = typer.Option(None, "--url", help="Fork base URL (default OBS_SERVER_URL or http://127.0.0.1:43190)."),
+    token: Optional[str] = typer.Option(None, "--token", help="Bearer token (default OBS_AUTH_TOKEN or devtoken)."),
+    db: Optional[Path] = typer.Option(None, "--db", help="Trajectory DB to read (default: configured trajectory_db_path)."),
+) -> None:
+    """Translate a run's trajectory rows and POST them to the pi-observability fork."""
+    import urllib.error
+
+    from pi_harness.config import load_config
+    from pi_harness.observability import bridge
+
+    db_path = db or load_config().trajectory_db_path
+    target = url or bridge.DEFAULT_URL
+    try:
+        result = bridge.backfill_run(run, url=target, token=token or bridge.DEFAULT_TOKEN, db_path=db_path)
+    except urllib.error.URLError as exc:
+        typer.echo(f"error: could not reach observability fork at {target}: {exc}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(
+        f"bridged {result.sent} events for {run} "
+        f"({result.ingested} ingested, {result.rejected} already present)"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # lint / decompose
 # --------------------------------------------------------------------------- #

@@ -35,3 +35,6 @@ dist/
 
 # Smoke-test scratch artifact (written into the repo root by the e2e team)
 smoke_out.txt
+
+# Visual-companion brainstorm mockups
+.superpowers/

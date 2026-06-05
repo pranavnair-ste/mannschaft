@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -14,6 +14,79 @@ from pi_harness.trajectory.schema import TrajectoryEvent
 
 
 SAMPLE = Path(__file__).resolve().parents[2] / "docs" / "captures" / "pi-stdout-json.ndjson"
+
+
+def test_turn_message_captures_text_and_thinking():
+    line = json.dumps({
+        "type": "turn_end",
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-8",
+            "stopReason": "stop",
+            "usage": {"input": 100, "output": 20, "cost": {"total": 0.01}},
+            "content": [
+                {"type": "thinking", "thinking": "weighing options", "thinkingSignature": "sig"},
+                {"type": "text", "text": "Here is the answer."},
+            ],
+        },
+    })
+    parser = PiEventParser(run_id="r", agent_id="a")
+    events = list(parser.feed(line))
+    assert len(events) == 1
+    out = events[0].output
+    assert out["text"] == "Here is the answer."
+    assert out["thinking"] == "weighing options"
+    assert out["cost_usd"] == 0.01  # existing fields preserved
+
+
+def test_turn_message_text_empty_on_tool_only_turn():
+    line = json.dumps({
+        "type": "turn_end",
+        "message": {"role": "assistant", "model": "gpt-5.4-mini", "stopReason": "toolUse",
+                    "usage": {"input": 5, "output": 5},
+                    "content": [{"type": "toolCall", "id": "c1", "name": "ls", "arguments": {}}]},
+    })
+    out = list(PiEventParser(run_id="r", agent_id="a").feed(line))[0].output
+    assert out["text"] == ""        # tool-only turns legitimately have no prose
+    assert out["thinking"] == ""
+
+
+def test_turn_message_captures_timing_from_delta_arrivals():
+    """TTFT/generation/tps come from wall-clock arrival of turn_start, the first
+    text/thinking delta, and turn_end (pi has no per-event ts, so now_fn stamps
+    each feed). With an advancing clock the parser computes real timing."""
+    base = datetime(2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc)
+    ticks = iter([
+        base,                                 # turn_start
+        base + timedelta(milliseconds=500),   # first content delta -> TTFT 500ms
+        base + timedelta(milliseconds=2500),  # turn_end -> generation 2000ms
+    ])
+    p = PiEventParser(run_id="r", agent_id="a", now_fn=lambda: next(ticks))
+    list(p.feed('{"type":"turn_start"}'))
+    list(p.feed('{"type":"message_update","assistantMessageEvent":{"type":"text_start"}}'))
+    ev = list(p.feed(json.dumps({
+        "type": "turn_end",
+        "message": {"role": "assistant", "model": "m", "stopReason": "stop",
+                    "usage": {"input": 10, "output": 100},
+                    "content": [{"type": "text", "text": "hi"}]},
+    })))[0]
+    out = ev.output
+    assert out["prefill_ms"] == 500
+    assert out["generation_ms"] == 2000
+    assert out["latency_ms"] == 2500
+    assert out["output_tps"] == 50.0   # 100 output tokens / 2.0s
+
+
+def test_turn_message_timing_absent_without_turn_start():
+    """A turn_end with no preceding turn_start (the parser saw no turn boundary)
+    emits no timing fields rather than guessing."""
+    line = json.dumps({
+        "type": "turn_end",
+        "message": {"role": "assistant", "model": "m", "stopReason": "stop",
+                    "usage": {"input": 5, "output": 5}, "content": [{"type": "text", "text": "x"}]},
+    })
+    out = list(PiEventParser(run_id="r", agent_id="a").feed(line))[0].output
+    assert "latency_ms" not in out and "prefill_ms" not in out
 
 
 def test_turn_message_tolerates_malformed_usage():
