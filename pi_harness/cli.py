@@ -196,6 +196,23 @@ def stop(
     typer.echo(f"stopped {run_id}")
 
 
+@app.command()
+def observe(
+    run: str = typer.Option(..., "--run", help="run_id to backfill/replay into the observability fork."),
+    url: Optional[str] = typer.Option(None, "--url", help="Fork base URL (default OBS_SERVER_URL or http://127.0.0.1:43190)."),
+    token: Optional[str] = typer.Option(None, "--token", help="Bearer token (default OBS_AUTH_TOKEN or devtoken)."),
+) -> None:
+    """Translate a run's trajectory rows and POST them to the pi-observability fork."""
+    from pi_harness.observability import bridge
+
+    n = bridge.backfill_run(
+        run,
+        url=url or bridge.DEFAULT_URL,
+        token=token or bridge.DEFAULT_TOKEN,
+    )
+    typer.echo(f"bridged {n} events for {run}")
+
+
 # --------------------------------------------------------------------------- #
 # lint / decompose
 # --------------------------------------------------------------------------- #
