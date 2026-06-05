@@ -111,10 +111,20 @@ def list_entries(
 ) -> list[CorpusEntryDTO]:
     cfg = request.app.state.config
     reader = CorpusReader(cfg.corpus_root)
+    # Validate the classification up front: an unknown value must be a 400, not
+    # an uncaught Classification(...) ValueError -> HTTP 500 (audit #22).
+    cls_enum = None
+    if classification:
+        try:
+            cls_enum = Classification(classification)
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail=f"unknown classification {classification!r}"
+            )
     if archived:
         pairs = [(e, True) for e in _archived_entries(cfg.corpus_root)]
-    elif classification:
-        pairs = [(e, False) for e in reader.find_by_classification(Classification(classification))]
+    elif cls_enum is not None:
+        pairs = [(e, False) for e in reader.find_by_classification(cls_enum)]
     else:
         pairs = [(e, False) for e in _active_entries(reader)]
 

@@ -12,6 +12,7 @@ from pi_harness.trajectory.store import (
     init_db,
     query_agent_steps,
     query_events,
+    query_events_after,
     query_runs,
     write_event,
 )
@@ -53,6 +54,27 @@ def _ev(
         corpus_refs=corpus_refs or [],
         corpus_cited=corpus_cited or [],
     )
+
+
+def test_query_events_after_pages_by_rowid(db_path: Path):
+    """The rowid cursor returns only newer rows, in insertion order, regardless
+    of ts (the monotonic append cursor a live tailer must use, audit #24)."""
+    # Insert out of ts order: a later-inserted event has an EARLIER timestamp.
+    t_new = datetime(2026, 5, 25, 12, 0, 0, tzinfo=timezone.utc)
+    t_old = t_new - timedelta(hours=1)
+    write_event(_ev(step_id="first", ts=t_new), db_path=db_path)
+    write_event(_ev(step_id="second", ts=t_old), db_path=db_path)  # earlier ts, later rowid
+
+    page = query_events_after("run-1", 0, db_path=db_path)
+    assert [e.step_id for _id, e in page] == ["first", "second"]  # insertion order
+    ids = [i for i, _e in page]
+    assert ids == sorted(ids)  # monotonic
+
+    # Cursor past the first row yields only the second (no skip/re-send).
+    rest = query_events_after("run-1", ids[0], db_path=db_path)
+    assert [e.step_id for _id, e in rest] == ["second"]
+    # Cursor past the last row yields nothing.
+    assert query_events_after("run-1", ids[-1], db_path=db_path) == []
 
 
 def test_init_db_creates_schema(tmp_path: Path):

@@ -148,3 +148,29 @@ def test_local_models_returns_empty_when_server_unreachable(client, monkeypatch)
     body = r.json()
     assert body["models"] == []
     assert "error" in body  # Some user-facing message.
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "http://169.254.169.254/v1",  # cloud metadata (link-local)
+        "http://8.8.8.8/v1",          # public / global
+        "ftp://localhost/v1",         # wrong scheme
+    ],
+)
+def test_local_models_rejects_ssrf_targets(client, bad_url):
+    """Discover must refuse non-loopback/private targets (SSRF), audit #6.
+    (IP literals + bad scheme — no real DNS lookups.)"""
+    r = client.get("/settings/models/local-models", params={"base_url": bad_url})
+    assert r.status_code == 400, r.text
+
+
+def test_put_settings_local_rejects_ssrf_url(client, settings_home):
+    """A local provider with an SSRF-able base_url is rejected and NOT persisted
+    (audit #23)."""
+    r = client.put("/settings/models", json={
+        "orchestrator": {"provider": "local", "model": "m"},
+        "builder": {"provider": "api", "model": "gpt-5-mini"},
+        "local_base_url": "http://169.254.169.254/v1",
+    })
+    assert r.status_code == 400, r.text

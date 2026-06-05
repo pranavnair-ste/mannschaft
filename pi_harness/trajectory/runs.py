@@ -186,6 +186,55 @@ def get_run(run_id: str, *, db_path: Path | str | None = None) -> dict[str, Any]
     return _row_to_dict(row) if row else None
 
 
+def _summarize_run(conn: sqlite3.Connection, r: sqlite3.Row) -> RunSummary:
+    """Build a RunSummary for one run row, aggregating its event stats + cost."""
+    agg = conn.execute(
+        """SELECT COUNT(*) AS n,
+                  COUNT(DISTINCT agent_id) AS agents,
+                  COALESCE(SUM(tokens_in), 0) AS tin,
+                  COALESCE(SUM(tokens_out), 0) AS tout
+           FROM trajectory_events WHERE run_id = ?""",
+        (r["run_id"],),
+    ).fetchone()
+    ev_rows = conn.execute(
+        "SELECT model, tokens_in, tokens_out, output FROM trajectory_events WHERE run_id = ?",
+        (r["run_id"],),
+    ).fetchall()
+    cost = sum(_event_cost_preferring_self_reported(e) for e in ev_rows)
+    return RunSummary(
+        run_id=r["run_id"],
+        status=r["status"],
+        topology=r["topology"],
+        started_at=datetime.fromisoformat(r["started_at"]) if r["started_at"] else None,
+        ended_at=datetime.fromisoformat(r["ended_at"]) if r["ended_at"] else None,
+        agent_count=int(agg["agents"]),
+        total_tokens_in=int(agg["tin"]),
+        total_tokens_out=int(agg["tout"]),
+        total_cost_usd=cost,
+        event_count=int(agg["n"]),
+        parent_run_id=r["parent_run_id"],
+        branch_from_step=r["branch_from_step"],
+        goal=r["goal"],
+        spec_id=r["spec_id"],
+    )
+
+
+def get_run_summary(
+    run_id: str, *, db_path: Path | str | None = None
+) -> RunSummary | None:
+    """Summary for a SINGLE run (targeted lookup), or None if it doesn't exist.
+
+    Lets the dashboard's detail/exists checks avoid scanning + aggregating every
+    run just to find one (audit #21)."""
+    path = _resolve_db_path(db_path)
+    init_runs_table(path)
+    with _connect(path) as conn:
+        r = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+        if r is None:
+            return None
+        return _summarize_run(conn, r)
+
+
 def query_run_summaries(
     *,
     status: str | None = None,
@@ -202,46 +251,9 @@ def query_run_summaries(
         params.append(status)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     limit_clause = f"LIMIT {int(limit)}" if limit is not None else ""
-    out: list[RunSummary] = []
     with _connect(path) as conn:
         run_rows = conn.execute(
             f"SELECT * FROM runs {where} ORDER BY started_at DESC {limit_clause}",
             params,
         ).fetchall()
-        for r in run_rows:
-            agg = conn.execute(
-                """SELECT COUNT(*) AS n,
-                          COUNT(DISTINCT agent_id) AS agents,
-                          COALESCE(SUM(tokens_in), 0) AS tin,
-                          COALESCE(SUM(tokens_out), 0) AS tout
-                   FROM trajectory_events WHERE run_id = ?""",
-                (r["run_id"],),
-            ).fetchone()
-            ev_rows = conn.execute(
-                "SELECT model, tokens_in, tokens_out, output FROM trajectory_events WHERE run_id = ?",
-                (r["run_id"],),
-            ).fetchall()
-            cost = sum(_event_cost_preferring_self_reported(e) for e in ev_rows)
-            out.append(
-                RunSummary(
-                    run_id=r["run_id"],
-                    status=r["status"],
-                    topology=r["topology"],
-                    started_at=datetime.fromisoformat(r["started_at"])
-                    if r["started_at"]
-                    else None,
-                    ended_at=datetime.fromisoformat(r["ended_at"])
-                    if r["ended_at"]
-                    else None,
-                    agent_count=int(agg["agents"]),
-                    total_tokens_in=int(agg["tin"]),
-                    total_tokens_out=int(agg["tout"]),
-                    total_cost_usd=cost,
-                    event_count=int(agg["n"]),
-                    parent_run_id=r["parent_run_id"],
-                    branch_from_step=r["branch_from_step"],
-                    goal=r["goal"],
-                    spec_id=r["spec_id"],
-                )
-            )
-    return out
+        return [_summarize_run(conn, r) for r in run_rows]

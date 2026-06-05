@@ -206,6 +206,31 @@ def query_events(
     return [TrajectoryEvent.from_row(r) for r in rows]
 
 
+def query_events_after(
+    run_id: str,
+    after_id: int,
+    *,
+    limit: int | None = None,
+    db_path: Path | str | None = None,
+) -> list[tuple[int, TrajectoryEvent]]:
+    """Events for ``run_id`` whose rowid > ``after_id``, ordered by rowid.
+
+    The autoincrement ``id`` is the only monotonic append cursor — (ts, step_id)
+    is NOT monotonic across concurrent writers — so this is what a live tailer
+    must page on to avoid skipping or re-sending out-of-order inserts (audit #24).
+    Returns ``(id, event)`` pairs.
+    """
+    path = _resolve_db_path(db_path)
+    limit_clause = f"LIMIT {int(limit)}" if limit is not None else ""
+    sql = (
+        "SELECT * FROM trajectory_events WHERE run_id = ? AND id > ? "
+        f"ORDER BY id ASC {limit_clause}"
+    )
+    with _connect(path) as conn:
+        rows = conn.execute(sql, (run_id, int(after_id))).fetchall()
+    return [(int(r["id"]), TrajectoryEvent.from_row(r)) for r in rows]
+
+
 def query_runs(
     *,
     limit: int | None = None,
@@ -289,6 +314,7 @@ __all__ = [
     "write_event",
     "awrite_event",
     "query_events",
+    "query_events_after",
     "query_runs",
     "query_agent_steps",
     "asyncio",
