@@ -56,18 +56,29 @@ class RunSummary:
     spec_id: str | None
 
 
+# Paths whose ``runs`` table has been initialized in THIS process. Read paths
+# (get_run, query_run_summaries) call init_runs_table to tolerate a fresh db;
+# without this guard each call re-issued CREATE TABLE DDL + commit, taking a
+# write lock on every read-only dashboard poll (audit #8).
+_runs_initialized: set[str] = set()
+
+
 def init_runs_table(db_path: Path | str | None = None) -> Path:
     """Create the ``runs`` table (and the events schema it lives beside). Idempotent.
 
     The registry and ``trajectory_events`` share one db file; ensuring both
     here means a single init call yields a consistent schema for the dashboard
-    summary join.
+    summary join. Runs its DDL at most once per path per process so read paths
+    never re-issue it (audit #8).
     """
     path = _resolve_db_path(db_path)
+    if str(path) in _runs_initialized:
+        return path
     init_db(path)  # ensures trajectory_events + indexes exist too
     with _connect(path) as conn:
         conn.execute(_CREATE_RUNS)
         conn.commit()
+    _runs_initialized.add(str(path))
     return path
 
 
