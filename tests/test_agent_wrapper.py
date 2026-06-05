@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 from pathlib import Path
 
 import pytest
@@ -119,3 +120,57 @@ def test_consume_stream_swallows_write_errors(tmp_path: Path, monkeypatch):
     # must not raise
     count = consume_stream(lines, run_id="r", agent_id="a", db_path=tmp_path / "x.db", tee_to=None)
     assert count == 0  # write failed so nothing counted
+
+
+def test_consume_stream_logs_dropped_write_errors(tmp_path: Path, monkeypatch, caplog):
+    """A dropped write must be visible in logs, not silently swallowed (#9)."""
+    import pi_harness.agent_wrapper as wrap
+
+    def _boom(event, *, db_path=None):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(wrap, "write_event", _boom)
+    lines = ['{"type":"tool_execution_start","toolCallId":"x","toolName":"ls","args":{}}']
+    with caplog.at_level(logging.WARNING, logger="pi_harness.agent_wrapper"):
+        consume_stream(lines, run_id="r", agent_id="a", db_path=tmp_path / "x.db", tee_to=None)
+    assert any("dropped" in r.getMessage().lower() for r in caplog.records)
+
+
+def test_build_argv_pi_guards_prompt_starting_with_dash():
+    """A prompt that looks like a flag must be shielded by an end-of-options
+    `--` so pi treats it as the positional prompt, not a flag (#27)."""
+    argv = _build_argv("pi", ["--help me"])
+    assert "--" in argv
+    assert argv.index("--") < argv.index("--help me")
+    assert argv[-1] == "--help me"
+
+
+def test_run_kills_child_and_propagates_on_capture_error(tmp_path: Path, monkeypatch):
+    """If capture raises, run() must kill the child (no orphaned credit burn)
+    and let the error surface — not swallow it via `return` in finally (#10/#26/#35)."""
+    import pi_harness.agent_wrapper as wrap
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = io.StringIO("line\n")
+            self.killed = False
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self):
+            return 137
+
+    fake = FakeProc()
+    monkeypatch.setattr(wrap.subprocess, "Popen", lambda *a, **k: fake)
+
+    def _boom(*a, **k):
+        raise RuntimeError("capture boom")
+
+    monkeypatch.setattr(wrap, "consume_stream", _boom)
+    with pytest.raises(RuntimeError, match="capture boom"):
+        wrap.run(
+            executor="pi", run_id="r", agent_id="a",
+            db_path=tmp_path / "x.db", prompt_args=["hi"], tee_stdout=False,
+        )
+    assert fake.killed is True
