@@ -29,6 +29,20 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 class PiEventParser:
     """Stream parser: feed one NDJSON line at a time, yield TrajectoryEvents."""
 
@@ -122,8 +136,12 @@ class PiEventParser:
         msg = event.get("message") or {}
         if msg.get("role") != "assistant":
             return None
-        usage = msg.get("usage") or {}
-        cost = (usage.get("cost") or {}).get("total", 0.0)
+        usage = msg.get("usage")
+        usage = usage if isinstance(usage, dict) else {}
+        cost_obj = usage.get("cost")
+        cost = cost_obj.get("total", 0.0) if isinstance(cost_obj, dict) else 0.0
+        # Coerce defensively: a malformed usage/cost number from pi must not
+        # raise and abort the whole capture stream (audit #29).
         return TrajectoryEvent(
             run_id=self.run_id,
             agent_id=self.agent_id,
@@ -133,13 +151,13 @@ class PiEventParser:
             tool="",
             input={},
             output={
-                "cost_usd": float(cost),
+                "cost_usd": _safe_float(cost),
                 "stopReason": msg.get("stopReason"),
                 "responseId": msg.get("responseId"),
             },
             duration_ms=0,
-            tokens_in=int(usage.get("input", 0) or 0),
-            tokens_out=int(usage.get("output", 0) or 0),
+            tokens_in=_safe_int(usage.get("input", 0)),
+            tokens_out=_safe_int(usage.get("output", 0)),
             outcome="success",
             classification="message",
         )

@@ -31,6 +31,7 @@ def basic_spec():
 def coord(mock_clawteam_client, mock_corpus_reader, mock_improve_runner, tmp_path):
     cfg = MagicMock()
     cfg.trajectory_db_path = tmp_path / "trajectory.db"
+    cfg.clawteam_state_dir = tmp_path / "state"  # real absolute path, not a Mock
     cfg.reasoning_model = "gpt-5"
     cfg.fast_model = "gpt-5-mini"
     return Coordinator(
@@ -114,6 +115,37 @@ class TestCoordinatorLaunch:
         # Profiles must exist before the team launches.
         names = [c[0] for c in client.mock_calls]
         assert names.index("register_profile") < names.index("launch_team")
+
+
+class TestCoordinatorIsolation:
+    def test_launch_isolates_by_default(self, coord, basic_spec, mock_clawteam_client):
+        with patch("pi_harness.topology.coordinator.git_workspace") as gw:
+            gw.repo_root.return_value = __import__("pathlib").Path("/repo")
+            handle = coord.launch(basic_spec)
+        # A run worktree was created off HEAD on a run/<id> branch...
+        assert gw.create_run_worktree.called
+        assert handle.run_branch and handle.run_branch.startswith("run/")
+        assert handle.workspace_repo
+        # ...and ClawTeam was pointed at it with --workspace.
+        kwargs = mock_clawteam_client.launch_team.call_args.kwargs
+        assert kwargs["workspace"] is True
+        assert kwargs["repo"] == handle.workspace_repo
+        # Agent names captured for consolidation (leader + workers).
+        assert set(handle.agent_names) == {"a", "b"}
+
+    def test_launch_in_place_skips_isolation(self, coord, basic_spec, mock_clawteam_client):
+        with patch("pi_harness.topology.coordinator.git_workspace") as gw:
+            handle = coord.launch(basic_spec, in_place=True)
+        assert not gw.create_run_worktree.called
+        assert handle.run_branch is None
+        kwargs = mock_clawteam_client.launch_team.call_args.kwargs
+        assert kwargs.get("workspace", False) is False
+
+    def test_launch_propagates_keep_alive_to_handle(self, coord, basic_spec):
+        with patch("pi_harness.topology.coordinator.git_workspace") as gw:
+            gw.repo_root.return_value = __import__("pathlib").Path("/repo")
+            handle = coord.launch(basic_spec, keep_alive=True)
+        assert handle.keep_alive is True
 
 
 class TestCoordinatorSyncMode:
@@ -234,6 +266,21 @@ class TestCoordinatorWaitAndImprove:
         assert out.success is False
         assert isinstance(out.error, ClawTeamRunFailure)
 
+    def test_wait_for_completion_captures_cli_error_as_failure(self, coord, basic_spec):
+        """A transient ClawTeamCLIError raised by the poll loop (list_tasks) must
+        be captured as a run failure, not allowed to escape and leave the team
+        live + the run un-finalized."""
+        from pi_harness.clawteam import ClawTeamCLIError
+
+        handle = coord.launch(basic_spec)
+        coord._clawteam_client.wait_for_completion.side_effect = ClawTeamCLIError(
+            ["clawteam", "task", "list"], 1, "transient boom"
+        )
+        coord._clawteam_client.list_tasks.return_value = []
+        out = coord.wait_for_completion(handle, timeout=60)
+        assert out.success is False
+        assert isinstance(out.error, ClawTeamCLIError)
+
     def test_on_completion_calls_improve_runner_once_on_success(self, coord, basic_spec):
         handle = coord.launch(basic_spec)
         coord._clawteam_client.wait_for_completion.return_value = True
@@ -278,17 +325,162 @@ class TestCoordinatorTeardown:
         client.kill_tmux_session.assert_called_once_with(handle.team_name)
         client.cleanup_team.assert_called_once_with(handle.team_name)
 
-    def test_on_completion_no_teardown_on_failure(self, coord, basic_spec):
-        from pi_harness.clawteam import ClawTeamTimeout
+    def test_on_completion_snapshots_and_tears_down_on_failure(self, coord, basic_spec, mock_clawteam_client):
+        with patch("pi_harness.topology.coordinator.git_workspace"):
+            handle = coord.launch(basic_spec)
+        coord._last_result[handle.run_id] = MagicMock(success=False)
+        coord.on_completion(handle)
+        # snapshot BEFORE teardown, then teardown happens.
+        mock_clawteam_client.snapshot_team.assert_called_once()
+        mock_clawteam_client.kill_tmux_session.assert_called_once_with(handle.team_name)
+        names = [c[0] for c in mock_clawteam_client.mock_calls]
+        assert names.index("snapshot_team") < names.index("kill_tmux_session")
+
+    def test_on_completion_failure_tears_down_even_if_snapshot_raises(
+        self, coord, basic_spec, mock_clawteam_client
+    ):
+        """A raising snapshot on the failure path must not skip teardown and
+        leave the team live (verification follow-up)."""
+        handle = coord.launch(basic_spec)
+        coord._last_result[handle.run_id] = MagicMock(success=False)
+        mock_clawteam_client.snapshot_team.side_effect = RuntimeError("snapshot boom")
+        coord.on_completion(handle)  # must not raise
+        mock_clawteam_client.kill_tmux_session.assert_called_once_with(handle.team_name)
+        mock_clawteam_client.cleanup_team.assert_called_once_with(handle.team_name)
+
+    def test_on_completion_keep_alive_skips_teardown_on_failure(self, coord, basic_spec, mock_clawteam_client):
+        with patch("pi_harness.topology.coordinator.git_workspace"):
+            handle = coord.launch(basic_spec, keep_alive=True)
+        coord._last_result[handle.run_id] = MagicMock(success=False)
+        coord.on_completion(handle)
+        mock_clawteam_client.snapshot_team.assert_called_once()  # still snapshot for debug
+        mock_clawteam_client.kill_tmux_session.assert_not_called()  # left live
+        mock_clawteam_client.cleanup_team.assert_not_called()
+
+    def test_on_completion_consolidates_then_tears_down_on_success(self, coord, basic_spec, mock_clawteam_client):
+        mock_clawteam_client.merge_workspace.return_value = MagicMock(returncode=0)
+        with patch("pi_harness.topology.coordinator.git_workspace"):
+            handle = coord.launch(basic_spec)
+        coord._last_result[handle.run_id] = MagicMock(success=True)
+        coord.on_completion(handle)
+        assert mock_clawteam_client.merge_workspace.called          # consolidated
+        mock_clawteam_client.kill_tmux_session.assert_called_once()  # then torn down
+        names = [c[0] for c in mock_clawteam_client.mock_calls]
+        assert names.index("merge_workspace") < names.index("kill_tmux_session")
+
+    def test_on_completion_success_tears_down_even_if_improve_raises(
+        self, coord, basic_spec, mock_clawteam_client
+    ):
+        """On the success path a raising improve loop must NOT skip teardown —
+        otherwise the team stays live (credit burn) and the worktree leaks."""
+        mock_clawteam_client.merge_workspace.return_value = MagicMock(returncode=0)
+        handle = coord.launch(basic_spec)
+        coord._last_result[handle.run_id] = MagicMock(success=True)
+        coord._improve_runner.run_for_completed_run.side_effect = RuntimeError("improve boom")
+        with pytest.raises(RuntimeError, match="improve boom"):
+            coord.on_completion(handle)
+        # teardown ran despite the improve failure.
+        mock_clawteam_client.kill_tmux_session.assert_called_once_with(handle.team_name)
+        mock_clawteam_client.cleanup_team.assert_called_once_with(handle.team_name)
+
+    def test_on_completion_warns_on_consolidation_conflicts(
+        self, coord, basic_spec, mock_clawteam_client, capsys
+    ):
+        """Consolidation conflicts must be surfaced (not silently discarded) and
+        teardown must still run."""
+        handle = coord.launch(basic_spec)
+        coord._last_result[handle.run_id] = MagicMock(success=True)
+        loser = handle.agent_names[-1]
+
+        def merge(team, agent, *, repo, target):
+            return MagicMock(returncode=1 if agent == loser else 0)
+
+        mock_clawteam_client.merge_workspace.side_effect = merge
+        coord.on_completion(handle)
+        err = capsys.readouterr().err
+        assert "did not merge cleanly" in err and loser in err
+        mock_clawteam_client.kill_tmux_session.assert_called_once()
+
+    def test_stop_tears_down_known_run(self, coord, basic_spec, mock_clawteam_client):
+        """stop(run_id) halts a (detached) run: kills its team + marks cancelled."""
+        from pi_harness.trajectory.runs import get_run
 
         handle = coord.launch(basic_spec)
-        client = coord._clawteam_client
-        client.wait_for_completion.side_effect = ClawTeamTimeout("nope")
-        client.list_tasks.return_value = []
-        coord.wait_for_completion(handle, timeout=60)
-        coord.on_completion(handle)
-        client.kill_tmux_session.assert_not_called()
-        client.cleanup_team.assert_not_called()
+        assert coord.stop(handle.run_id) is True
+        mock_clawteam_client.kill_tmux_session.assert_called_with(handle.team_name)
+        mock_clawteam_client.cleanup_team.assert_called_with(handle.team_name)
+        row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
+        assert row["status"] == "cancelled"
+
+    def test_stop_unknown_run_returns_false(self, coord):
+        assert coord.stop("run-does-not-exist") is False
+
+    def test_launch_tears_down_on_create_task_failure(
+        self, coord, basic_spec, mock_clawteam_client
+    ):
+        """If task seeding fails after the team launches, the half-launched team
+        must be torn down (not orphaned live) and the error re-raised."""
+        mock_clawteam_client.create_task.side_effect = RuntimeError("seed boom")
+        with pytest.raises(RuntimeError, match="seed boom"):
+            coord.launch(basic_spec)
+        assert mock_clawteam_client.kill_tmux_session.called
+        assert mock_clawteam_client.cleanup_team.called
+
+    def test_teardown_removes_worktree_even_if_cleanup_team_raises(
+        self, coord, basic_spec, mock_clawteam_client
+    ):
+        """An early launch failure (before the team exists) must still remove the
+        run worktree even though cleanup_team raises on the missing team — each
+        teardown step is independent/best-effort (verification follow-up)."""
+        from pi_harness.clawteam import ClawTeamCLIError
+
+        mock_clawteam_client.install_template.side_effect = RuntimeError("install boom")
+        mock_clawteam_client.cleanup_team.side_effect = ClawTeamCLIError(
+            ["clawteam", "team", "cleanup"], 1, "no such team"
+        )
+        with patch("pi_harness.topology.coordinator.git_workspace") as gw:
+            gw.repo_root.return_value = __import__("pathlib").Path("/repo")
+            with pytest.raises(RuntimeError, match="install boom"):
+                coord.launch(basic_spec)
+            # cleanup_team raised, but teardown still reached worktree removal.
+            assert gw.remove_run_worktree.called
+
+
+class TestCoordinatorConsolidate:
+    def _isolated_handle(self):
+        from datetime import datetime, timezone
+        return RunHandle(
+            run_id="run-1", team_name="team-1",
+            started_at=datetime.now(timezone.utc), topology=TopologyMode.SEQUENTIAL,
+            run_branch="run/abc", workspace_repo="/wt", agent_names=["a", "b"],
+        )
+
+    def test_consolidate_merges_each_agent_into_run_branch(self, coord, mock_clawteam_client):
+        mock_clawteam_client.merge_workspace.return_value = MagicMock(returncode=0)
+        handle = self._isolated_handle()
+        conflicts = coord.consolidate(handle)
+        assert conflicts == []
+        calls = mock_clawteam_client.merge_workspace.call_args_list
+        assert [c.args[1] for c in calls] == ["a", "b"]  # leader-first order
+        for c in calls:
+            assert c.kwargs["repo"] == "/wt"
+            assert c.kwargs["target"] == "run/abc"
+
+    def test_consolidate_reports_conflicts_without_raising(self, coord, mock_clawteam_client):
+        def merge(team, agent, *, repo, target):
+            return MagicMock(returncode=1 if agent == "b" else 0)
+        mock_clawteam_client.merge_workspace.side_effect = merge
+        conflicts = coord.consolidate(self._isolated_handle())
+        assert conflicts == ["b"]
+
+    def test_consolidate_noop_for_in_place(self, coord, mock_clawteam_client):
+        from datetime import datetime, timezone
+        handle = RunHandle(
+            run_id="run-1", team_name="team-1",
+            started_at=datetime.now(timezone.utc), topology=TopologyMode.SEQUENTIAL,
+        )  # run_branch is None
+        assert coord.consolidate(handle) == []
+        assert not mock_clawteam_client.merge_workspace.called
 
 
 class TestCoordinatorTemplateEmission:
@@ -601,6 +793,19 @@ class TestCoordinatorBranch:
         row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
         child_spec = runspec_from_json(row["run_spec_json"])
         assert child_spec.mode.value == "parallel"
+
+    def test_branch_clears_child_spec_id_and_sets_lineage_once(self, coord, basic_spec):
+        """A branched child registers in a single insert with lineage, and its
+        spec_id is cleared (not silently inherited from the parent's spec) (#39)."""
+        from pi_harness.trajectory.runs import get_run
+
+        parent = self._register_parent(coord, basic_spec)
+        handle = coord.branch(parent, step_id="s-9", overrides={})
+        row = get_run(handle.run_id, db_path=coord._config.trajectory_db_path)
+        assert row["spec_id"] is None
+        assert row["parent_run_id"] == parent
+        assert row["branch_from_step"] == "s-9"
+        assert row["status"] == "running"
 
     def test_branch_unknown_parent_raises(self, coord):
         with pytest.raises(ValueError, match="unknown parent run"):

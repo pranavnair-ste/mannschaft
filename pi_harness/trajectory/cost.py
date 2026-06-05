@@ -11,8 +11,11 @@ at runtime with ``PI_HARNESS_MODEL_PRICES`` (JSON: ``{"model": [in, out]}``).
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any, Mapping
+
+log = logging.getLogger(__name__)
 
 # EXAMPLE prices (USD / 1M tokens). Update with confirmed values or override
 # via PI_HARNESS_MODEL_PRICES.
@@ -28,10 +31,30 @@ def _prices() -> dict[str, tuple[float, float]]:
         return MODEL_PRICES
     try:
         parsed = json.loads(raw)
-        return {k: (float(v[0]), float(v[1])) for k, v in parsed.items()}
-    except (ValueError, TypeError, KeyError, IndexError):
-        # Malformed override -> fall back to built-ins rather than crash.
+    except ValueError:
+        log.warning(
+            "PI_HARNESS_MODEL_PRICES is not valid JSON; using built-in prices"
+        )
         return MODEL_PRICES
+    if not isinstance(parsed, dict):
+        log.warning(
+            "PI_HARNESS_MODEL_PRICES must be a JSON object {model: [in, out]}; "
+            "using built-in prices"
+        )
+        return MODEL_PRICES
+    # Overlay valid entries onto the built-ins, parsing per-entry so ONE
+    # malformed entry can't discard the whole override (audit #25). A valid
+    # entry overrides its model; other models keep their built-in price.
+    prices = dict(MODEL_PRICES)
+    for k, v in parsed.items():
+        try:
+            prices[k] = (float(v[0]), float(v[1]))
+        except (TypeError, ValueError, KeyError, IndexError):
+            log.warning(
+                "PI_HARNESS_MODEL_PRICES entry %r is malformed (%r); skipping it",
+                k, v,
+            )
+    return prices
 
 
 def event_cost(model: str, tokens_in: int, tokens_out: int) -> float:

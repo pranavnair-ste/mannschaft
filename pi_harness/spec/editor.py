@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import uuid
 from datetime import datetime, timezone
 
@@ -40,28 +41,51 @@ logger = logging.getLogger(__name__)
 # surface without duplicating handlers.
 router = APIRouter()
 
+# Serializes spec-file read-modify-write across ALL in-process spec mutators
+# (every CRUD/lint/decompose/launch handler + the background launch finalizer),
+# so no writer's read-then-write can interleave with — and clobber — another's
+# (audit #33). Paired with the atomic write in serialize_spec. Every mutation
+# MUST go through _patch_spec; do slow work (LLM decompose, coordinator.launch)
+# BEFORE calling it so the lock is held only for the file read-modify-write.
+_SPEC_LOCK = threading.Lock()
+
+
+def _patch_spec(spec_id: str, mutate) -> Spec:
+    """Atomic, lock-guarded read-modify-write of a spec file.
+
+    Under ``_SPEC_LOCK``: re-read the spec FRESH from disk, apply
+    ``mutate(data: dict) -> dict``, and serialize. Re-reading inside the lock is
+    what makes concurrent field edits survive: a mutator only overwrites the
+    fields it changes, on top of whatever the latest writer (e.g. the finalizer's
+    status flip) committed."""
+    with _SPEC_LOCK:
+        data = parse_spec(spec_path(spec_id)).__dict__.copy()
+        updated = Spec(**mutate(data))
+        serialize_spec(updated, spec_path(spec_id))
+        return updated
+
 
 def _set_spec_status(spec_id: str, new_status: str) -> None:
-    """Atomically rewrite a spec file with a new status. Used by the launch
-    finalizer; tolerant of a missing/changed-from-under-us spec file."""
+    """Flip a spec's status (launch finalizer). Tolerant of a missing/changed
+    spec file; updates only status/updated_at so concurrent field edits survive."""
+    def _mutate(data: dict) -> dict:
+        data["status"] = new_status
+        data["updated_at"] = _now()
+        return data
+
     try:
-        spec = parse_spec(spec_path(spec_id))
+        _patch_spec(spec_id, _mutate)
     except Exception:
-        logger.exception("finalizer: failed to load spec %s for status update", spec_id)
-        return
-    data = spec.__dict__.copy()
-    data["status"] = new_status
-    data["updated_at"] = _now()
-    serialize_spec(Spec(**data), spec_path(spec_id))
+        logger.exception("finalizer: failed to update status for spec %s", spec_id)
 
 
-def _finalize_run(coordinator, handle, spec_id: str) -> None:
+def _finalize_run(coordinator, handle, spec_id: str, timeout: float = 1800.0) -> None:
     """Background-task body: wait for the team to terminate, run the improve
     loop + teardown via on_completion, and flip the spec to its post-run
     status. Errors are logged; they must not crash the FastAPI worker."""
     success = False
     try:
-        result = coordinator.wait_for_completion(handle)
+        result = coordinator.wait_for_completion(handle, timeout=timeout)
         success = bool(getattr(result, "success", False))
         coordinator.on_completion(handle)
     except Exception:
@@ -125,7 +149,11 @@ def _new_spec_id(title: str) -> str:
 
 
 def _load(spec_id: str) -> Spec:
-    path = spec_path(spec_id)
+    try:
+        path = spec_path(spec_id)
+    except ValueError as exc:
+        # Reject a malformed/traversing spec_id with 400, not a 500 (audit #30).
+        raise HTTPException(status_code=400, detail=str(exc))
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"spec {spec_id} not found")
     return parse_spec(path)
@@ -162,8 +190,11 @@ def list_specs() -> SpecList:
     for path in sorted(storage.glob("*.md")):
         try:
             specs.append(parse_spec(path))
-        except ValueError:
-            continue  # skip malformed files; don't take the whole list down
+        except Exception:
+            # Skip ANY unreadable/corrupt spec (bad YAML, missing field, etc.)
+            # rather than 500-ing the whole listing on one bad file (audit #31).
+            logger.warning("list_specs: skipping unreadable spec %s", path, exc_info=True)
+            continue
     return SpecList(specs=specs)
 
 
@@ -200,18 +231,19 @@ _DECOMPOSER_INPUT_FIELDS = frozenset(
 
 @router.put("/specs/{spec_id}", response_model=Spec)
 def update_spec(spec_id: str, body: UpdateSpecBody) -> Spec:
-    spec = _load(spec_id)
+    _load(spec_id)  # 400/404 before taking the lock
     patch = body.model_dump(exclude_unset=True)
-    data = spec.__dict__.copy()
-    data.update(patch)
-    data["updated_at"] = _now()
-    if _DECOMPOSER_INPUT_FIELDS & patch.keys():
-        data["status"] = "draft"
-        data["linter_score"] = None
-        data["decomposed_tasks"] = None
-    updated = Spec(**data)
-    serialize_spec(updated, spec_path(spec_id))
-    return updated
+
+    def _mutate(data: dict) -> dict:
+        data.update(patch)
+        data["updated_at"] = _now()
+        if _DECOMPOSER_INPUT_FIELDS & patch.keys():
+            data["status"] = "draft"
+            data["linter_score"] = None
+            data["decomposed_tasks"] = None
+        return data
+
+    return _patch_spec(spec_id, _mutate)
 
 
 # ---------- linter + decomposer routes ----------
@@ -219,16 +251,18 @@ def update_spec(spec_id: str, body: UpdateSpecBody) -> Spec:
 
 @router.post("/specs/{spec_id}/lint", response_model=LintResult)
 def lint_spec(spec_id: str) -> LintResult:
-    spec = _load(spec_id)
-    result = Linter().lint(spec)
-    data = spec.__dict__.copy()
-    data["linter_score"] = result.score
-    data["updated_at"] = _now()
-    # Lint promotes draft → linted, but never demotes a decomposed/running
-    # spec — only an edit (PUT) invalidates the decomposition.
-    if not result.errors and data["status"] == "draft":
-        data["status"] = "linted"
-    serialize_spec(Spec(**data), spec_path(spec_id))
+    result = Linter().lint(_load(spec_id))  # read + lint outside the lock
+
+    def _mutate(data: dict) -> dict:
+        data["linter_score"] = result.score
+        data["updated_at"] = _now()
+        # Lint promotes draft → linted, but never demotes a decomposed/running
+        # spec — only an edit (PUT) invalidates the decomposition.
+        if not result.errors and data["status"] == "draft":
+            data["status"] = "linted"
+        return data
+
+    _patch_spec(spec_id, _mutate)
     return result
 
 
@@ -247,12 +281,15 @@ def decompose_spec(spec_id: str, decomposer=Depends(get_decomposer)) -> Decompos
                 ],
             },
         )
-    tasks = decomposer.decompose(spec)
-    data = spec.__dict__.copy()
-    data["status"] = "decomposed"
-    data["updated_at"] = _now()
-    data["decomposed_tasks"] = [t.model_dump() for t in tasks]
-    serialize_spec(Spec(**data), spec_path(spec_id))
+    tasks = decomposer.decompose(spec)  # LLM call — OUTSIDE the lock
+
+    def _mutate(data: dict) -> dict:
+        data["status"] = "decomposed"
+        data["updated_at"] = _now()
+        data["decomposed_tasks"] = [t.model_dump() for t in tasks]
+        return data
+
+    _patch_spec(spec_id, _mutate)
     return DecomposeResponse(tasks=tasks)
 
 
@@ -279,12 +316,14 @@ def launch_spec(
         # "decomposed" but no stored tasks; fall back to a live decomposer call.
         tasks = decomposer.decompose(spec)
     run_spec = spec_to_runspec(spec, tasks)
-    handle = coordinator.launch(run_spec)
+    handle = coordinator.launch(run_spec)  # launches the team — OUTSIDE the lock
 
-    data = spec.__dict__.copy()
-    data["status"] = "running"
-    data["updated_at"] = _now()
-    serialize_spec(Spec(**data), spec_path(spec_id))
+    def _mutate(data: dict) -> dict:
+        data["status"] = "running"
+        data["updated_at"] = _now()
+        return data
+
+    _patch_spec(spec_id, _mutate)
 
     # Reconcile the run after the HTTP response is sent: poll ClawTeam to
     # completion, run improve + teardown, flip spec status. Without this the

@@ -15,7 +15,7 @@ import asyncio
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -24,6 +24,21 @@ import aiosqlite
 from pi_harness.trajectory.schema import TrajectoryEvent
 
 SCHEMA_VERSION = 1
+
+# Paths whose schema has been initialized in THIS process. Consulted by init_db
+# (and runs.init_runs_table) so read paths — e.g. dashboard polling — never
+# re-issue CREATE TABLE/INDEX DDL, which would take a write lock on every call
+# (audit #8). Keyed by the resolved db path string.
+_initialized_dbs: set[str] = set()
+
+
+def _apply_pragmas(conn: sqlite3.Connection) -> None:
+    """WAL + busy_timeout so the API reader can run concurrently with agent
+    writers, and brief writer contention blocks-and-retries instead of
+    immediately raising 'database is locked' (audit #7/#16/#36)."""
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA synchronous=NORMAL")
 
 _CREATE_MIGRATIONS = """
 CREATE TABLE IF NOT EXISTS _migrations (
@@ -85,17 +100,24 @@ def _resolve_db_path(db_path: Path | str | None) -> Path:
 
 @contextmanager
 def _connect(db_path: Path) -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     try:
+        _apply_pragmas(conn)
         yield conn
     finally:
         conn.close()
 
 
 def init_db(db_path: Path | str | None = None) -> Path:
-    """Create the trajectory db and indexes. Idempotent."""
+    """Create the trajectory db and indexes. Idempotent.
+
+    Runs its DDL at most once per path per process (see ``_initialized_dbs``) so
+    hot read paths never pay for — or take a write lock from — repeated DDL.
+    """
     path = _resolve_db_path(db_path)
+    if str(path) in _initialized_dbs:
+        return path
     path.parent.mkdir(parents=True, exist_ok=True)
     with _connect(path) as conn:
         conn.execute(_CREATE_MIGRATIONS)
@@ -109,9 +131,10 @@ def init_db(db_path: Path | str | None = None) -> Path:
         if existing is None:
             conn.execute(
                 "INSERT INTO _migrations (version, applied_at) VALUES (?, ?)",
-                (SCHEMA_VERSION, datetime.utcnow().isoformat()),
+                (SCHEMA_VERSION, datetime.now(timezone.utc).isoformat()),
             )
         conn.commit()
+    _initialized_dbs.add(str(path))
     return path
 
 
@@ -122,7 +145,9 @@ async def awrite_event(
 ) -> None:
     """Async write — for capture pipelines."""
     path = _resolve_db_path(db_path)
-    async with aiosqlite.connect(path) as conn:
+    async with aiosqlite.connect(path, timeout=30.0) as conn:
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA busy_timeout=30000")
         await conn.execute(_INSERT_EVENT, event.to_row())
         await conn.commit()
 
@@ -181,6 +206,31 @@ def query_events(
     return [TrajectoryEvent.from_row(r) for r in rows]
 
 
+def query_events_after(
+    run_id: str,
+    after_id: int,
+    *,
+    limit: int | None = None,
+    db_path: Path | str | None = None,
+) -> list[tuple[int, TrajectoryEvent]]:
+    """Events for ``run_id`` whose rowid > ``after_id``, ordered by rowid.
+
+    The autoincrement ``id`` is the only monotonic append cursor — (ts, step_id)
+    is NOT monotonic across concurrent writers — so this is what a live tailer
+    must page on to avoid skipping or re-sending out-of-order inserts (audit #24).
+    Returns ``(id, event)`` pairs.
+    """
+    path = _resolve_db_path(db_path)
+    limit_clause = f"LIMIT {int(limit)}" if limit is not None else ""
+    sql = (
+        "SELECT * FROM trajectory_events WHERE run_id = ? AND id > ? "
+        f"ORDER BY id ASC {limit_clause}"
+    )
+    with _connect(path) as conn:
+        rows = conn.execute(sql, (run_id, int(after_id))).fetchall()
+    return [(int(r["id"]), TrajectoryEvent.from_row(r)) for r in rows]
+
+
 def query_runs(
     *,
     limit: int | None = None,
@@ -197,8 +247,7 @@ def query_runs(
     SELECT
         run_id,
         MAX(ts)   AS latest_ts,
-        COUNT(*)  AS event_count,
-        GROUP_CONCAT(DISTINCT agent_id) AS agent_ids
+        COUNT(*)  AS event_count
     FROM trajectory_events
     GROUP BY run_id
     ORDER BY latest_ts DESC
@@ -206,16 +255,21 @@ def query_runs(
     """
     with _connect(path) as conn:
         rows = conn.execute(sql).fetchall()
+        # Distinct agent ids per run, fetched as rows rather than via
+        # GROUP_CONCAT-and-split so an agent_id containing a comma is not
+        # mis-parsed into multiple ids (audit #40).
+        agent_rows = conn.execute(
+            "SELECT run_id, agent_id FROM trajectory_events GROUP BY run_id, agent_id"
+        ).fetchall()
+    agents_by_run: dict[str, list[str]] = {}
+    for ar in agent_rows:
+        agents_by_run.setdefault(ar["run_id"], []).append(ar["agent_id"])
     return [
         {
             "run_id": r["run_id"],
             "latest_ts": datetime.fromisoformat(r["latest_ts"]),
             "event_count": int(r["event_count"]),
-            "agent_ids": (
-                sorted((r["agent_ids"] or "").split(","))
-                if r["agent_ids"]
-                else []
-            ),
+            "agent_ids": sorted(agents_by_run.get(r["run_id"], [])),
         }
         for r in rows
     ]
@@ -260,6 +314,7 @@ __all__ = [
     "write_event",
     "awrite_event",
     "query_events",
+    "query_events_after",
     "query_runs",
     "query_agent_steps",
     "asyncio",

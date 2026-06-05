@@ -107,6 +107,70 @@ def test_launch_calls_coordinator_with_decomposed_tasks(good_spec, monkeypatch):
     assert by["t-cookie"].blocked_by == ["t-toggle"]
 
 
+def test_launch_non_detach_waits_and_finalizes(good_spec, monkeypatch):
+    """Exercise the wait/finalize path the --detach tests skip (audit #18)."""
+    from pi_harness.cli import app
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    fake_coord = MagicMock()
+    fake_coord.launch.return_value = MagicMock(run_id="run-abc", run_branch=None)
+    fake_coord.wait_for_completion.return_value = MagicMock(
+        success=True, terminal_statuses={"t1": "completed"}
+    )
+    monkeypatch.setattr("pi_harness.cli._make_coordinator", lambda cfg: fake_coord)
+    monkeypatch.setattr("pi_harness.cli._decompose_or_die", lambda spec, cfg: _canned_tasks())
+
+    result = runner.invoke(app, ["launch", str(good_spec)])  # no --detach
+    assert result.exit_code == 0, result.stdout
+    fake_coord.wait_for_completion.assert_called_once()
+    fake_coord.on_completion.assert_called_once()
+    assert "task=t1 status=completed" in result.stdout
+
+
+def test_launch_tears_down_when_wait_raises(good_spec, monkeypatch):
+    """Ctrl-C / unexpected error during the wait must tear the team down so it
+    can't keep burning credit, and must not be silently swallowed (audit #4)."""
+    from pi_harness.cli import app
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    fake_coord = MagicMock()
+    fake_coord.launch.return_value = MagicMock(run_id="run-abc", run_branch=None)
+    fake_coord.wait_for_completion.side_effect = RuntimeError("boom")
+    monkeypatch.setattr("pi_harness.cli._make_coordinator", lambda cfg: fake_coord)
+    monkeypatch.setattr("pi_harness.cli._decompose_or_die", lambda spec, cfg: _canned_tasks())
+
+    result = runner.invoke(app, ["launch", str(good_spec)])
+    assert result.exit_code != 0
+    fake_coord.teardown.assert_called_once_with(fake_coord.launch.return_value)
+
+
+def test_stop_command_stops_run(monkeypatch):
+    """`stop <run-id>` tears down a (detached) run via the coordinator (audit #5)."""
+    from pi_harness.cli import app
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    fake_coord = MagicMock()
+    fake_coord.stop.return_value = True
+    monkeypatch.setattr("pi_harness.cli._make_coordinator", lambda cfg: fake_coord)
+
+    result = runner.invoke(app, ["stop", "run-xyz"])
+    assert result.exit_code == 0, result.stdout
+    fake_coord.stop.assert_called_once_with("run-xyz")
+    assert "stopped run-xyz" in result.stdout
+
+
+def test_stop_command_unknown_run_exits_nonzero(monkeypatch):
+    from pi_harness.cli import app
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    fake_coord = MagicMock()
+    fake_coord.stop.return_value = False
+    monkeypatch.setattr("pi_harness.cli._make_coordinator", lambda cfg: fake_coord)
+
+    result = runner.invoke(app, ["stop", "ghost"])
+    assert result.exit_code == 1
+
+
 def test_launch_blocks_on_lint_errors(tmp_path, monkeypatch):
     from pi_harness.cli import app
 
@@ -250,6 +314,25 @@ def test_spec_new_refuses_existing(tmp_path, monkeypatch):
     runner.invoke(app, ["spec", "new", "dup", "--title", "x"])
     result = runner.invoke(app, ["spec", "new", "dup", "--title", "x"])
     assert result.exit_code != 0
+
+
+def test_spec_subcommands_reject_path_traversal(tmp_path, monkeypatch):
+    """A traversing spec_id must be rejected, not used to read/write/delete
+    files outside the specs dir (audit #17)."""
+    from pi_harness.cli import app
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    # Plant a file outside the specs dir that a traversal would target.
+    secret = tmp_path / "secret.md"
+    secret.write_text("top secret\n")
+    for cmd in (
+        ["spec", "rm", "../secret", "--force"],
+        ["spec", "show", "../secret"],
+        ["spec", "new", "../secret", "--title", "pwn", "--force"],
+    ):
+        result = runner.invoke(app, cmd)
+        assert result.exit_code == 2, (cmd, result.stdout)
+    # The outside file is untouched (not deleted, not overwritten).
+    assert secret.exists() and secret.read_text() == "top secret\n"
 
 
 def test_spec_ls_lists_existing(tmp_path, monkeypatch):

@@ -39,6 +39,18 @@ log = logging.getLogger(__name__)
 # when every task is "completed". "blocked" is transient (waiting on a dependency).
 TERMINAL_STATUSES = frozenset({"completed"})
 FAILURE_STATUSES: frozenset[str] = frozenset()
+# Statuses a task can still make progress from. If NONE of the board's tasks are
+# runnable (everything left is "blocked") for several consecutive polls, the run
+# is deadlocked: ClawTeam 0.2.x has no "failed" status, so without this a wedged
+# run would burn the ENTIRE timeout before being torn down (audit #13).
+#
+# SCOPE: this catches a *blocked* deadlock (nothing pending/in_progress). It does
+# NOT catch a task stuck "in_progress" because its agent hung or died — by task
+# status alone that is indistinguishable from a legitimately long-running task,
+# so flagging it would false-kill real work. The hard ``timeout`` bounds that
+# case; detecting it properly needs agent-process/liveness signals (future work).
+RUNNABLE_STATUSES = frozenset({"pending", "in_progress"})
+DEFAULT_STALL_POLL_LIMIT = 12
 
 
 class ClawTeamCLIError(RuntimeError):
@@ -114,10 +126,18 @@ class ClawTeamClient:
         team_name: str,
         goal: str,
         profile: Optional[str] = None,
+        *,
+        workspace: bool = False,
+        repo: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
         """Spawn a new ClawTeam team from a template.
 
-        Real invocation: ``clawteam --data-dir D launch TEMPLATE --team Y --goal Z [--profile P]``
+        Real invocation: ``clawteam --data-dir D launch TEMPLATE --team Y --goal Z
+        [--profile P] [--workspace] [--repo PATH]``
+
+        When ``workspace`` is True, ClawTeam creates a per-agent git worktree off
+        the current branch of ``repo`` (default cwd); the harness uses this for
+        run isolation (see topology.coordinator).
         """
         sub: List[str] = [
             "launch", template,
@@ -126,6 +146,10 @@ class ClawTeamClient:
         ]
         if profile is not None:
             sub.extend(["--profile", profile])
+        if workspace:
+            sub.append("--workspace")
+        if repo is not None:
+            sub.extend(["--repo", repo])
         return self._run(sub)
 
     def cleanup_team(self, team_name: str) -> subprocess.CompletedProcess:
@@ -134,6 +158,43 @@ class ClawTeamClient:
         Real invocation: ``clawteam --data-dir D team cleanup TEAM --force``
         """
         return self._run(["team", "cleanup", team_name, "--force"])
+
+    def merge_workspace(
+        self,
+        team_name: str,
+        agent_name: str,
+        *,
+        repo: Optional[str] = None,
+        target: Optional[str] = None,
+    ) -> subprocess.CompletedProcess:
+        """Merge one agent's workspace branch into ``target`` (default: base branch).
+
+        Real invocation: ``clawteam --data-dir D workspace merge TEAM AGENT
+        [--repo R] [--target T]``
+
+        Uses ``check=False`` so a merge conflict (non-zero exit) is *returned* for
+        the caller to surface, not raised — consolidation must continue for the
+        remaining agents.
+        """
+        sub: List[str] = ["workspace", "merge", team_name, agent_name]
+        if repo is not None:
+            sub.extend(["--repo", repo])
+        if target is not None:
+            sub.extend(["--target", target])
+        return self._run(sub, check=False)
+
+    def snapshot_team(
+        self, team_name: str, *, tag: Optional[str] = None,
+    ) -> subprocess.CompletedProcess:
+        """Snapshot full team state (config, tasks, events, sessions, costs).
+
+        Real invocation: ``clawteam --data-dir D team snapshot TEAM [--tag L]``.
+        ``check=False`` so a snapshot failure never blocks teardown.
+        """
+        sub: List[str] = ["team", "snapshot", team_name]
+        if tag is not None:
+            sub.extend(["--tag", tag])
+        return self._run(sub, check=False)
 
     def kill_tmux_session(self, team_name: str) -> subprocess.CompletedProcess:
         """Kill the tmux session ClawTeam created for ``team_name``.
@@ -263,6 +324,7 @@ class ClawTeamClient:
         timeout: float,
         poll_interval: float = 5.0,
         on_poll: Optional[Callable[[List[Mapping[str, Any]]], None]] = None,
+        stall_poll_limit: int = DEFAULT_STALL_POLL_LIMIT,
     ) -> bool:
         """Block until every task on the board reaches a terminal status.
 
@@ -271,13 +333,16 @@ class ClawTeamClient:
         A raising callback is logged and ignored; it never aborts the wait.
 
         Returns:
-            ``True`` if all tasks finished cleanly within ``timeout``.
+            ``True`` if all tasks finished cleanly within ``timeout`` (an empty
+            board — a zero-task run — also returns ``True``).
 
         Raises:
-            ClawTeamRunFailure: If any task reaches a failure status.
+            ClawTeamRunFailure: If any task reaches a failure status, or the run
+                deadlocks (no runnable task for ``stall_poll_limit`` polls).
             ClawTeamTimeout: If ``timeout`` elapses before all tasks finish.
         """
         deadline = time.monotonic() + timeout
+        stall_polls = 0
         while True:
             tasks = self.list_tasks(team_name)
             if on_poll is not None:
@@ -285,17 +350,35 @@ class ClawTeamClient:
                     on_poll(tasks)
                 except Exception:  # noqa: BLE001 — capture must never break the wait
                     log.exception("wait_for_completion: on_poll callback failed")
-            if tasks:
-                failed = [t for t in tasks if t.get("status") in FAILURE_STATUSES]
-                if failed:
-                    failed_ids = ", ".join(
-                        str(t.get("task_id", t.get("id", "?"))) for t in failed
-                    )
+            if not tasks:
+                # Empty board: nothing to wait on. The harness seeds the DAG
+                # before waiting, so an empty board is a zero-task run — return
+                # rather than burning the whole timeout (audit #37).
+                return True
+            failed = [t for t in tasks if t.get("status") in FAILURE_STATUSES]
+            if failed:
+                failed_ids = ", ".join(
+                    str(t.get("task_id", t.get("id", "?"))) for t in failed
+                )
+                raise ClawTeamRunFailure(
+                    f"team={team_name!r} task(s) failed: {failed_ids}"
+                )
+            if all(t.get("status") in TERMINAL_STATUSES for t in tasks):
+                return True
+            # Deadlock detection: if no task is runnable (everything left is
+            # blocked) for stall_poll_limit consecutive polls, fail fast instead
+            # of waiting out the clock (audit #13). The persistence requirement
+            # avoids false positives from a task transiently blocked while its
+            # blocker is mid-flight.
+            if any(t.get("status") in RUNNABLE_STATUSES for t in tasks):
+                stall_polls = 0
+            else:
+                stall_polls += 1
+                if stall_polls >= stall_poll_limit:
                     raise ClawTeamRunFailure(
-                        f"team={team_name!r} task(s) failed: {failed_ids}"
+                        f"team={team_name!r} deadlocked: no runnable "
+                        f"(pending/in_progress) task for {stall_polls} consecutive polls"
                     )
-                if all(t.get("status") in TERMINAL_STATUSES for t in tasks):
-                    return True
             if time.monotonic() >= deadline:
                 raise ClawTeamTimeout(
                     f"team={team_name!r} did not finish within {timeout:.1f}s"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,6 +14,24 @@ from pi_harness.trajectory.schema import TrajectoryEvent
 
 
 SAMPLE = Path(__file__).resolve().parents[2] / "docs" / "captures" / "pi-stdout-json.ndjson"
+
+
+def test_turn_message_tolerates_malformed_usage():
+    """Malformed usage/cost numbers must not crash the parser and abort the
+    whole capture stream (#29)."""
+    p = PiEventParser(run_id="r", agent_id="a")
+    line = json.dumps({
+        "type": "turn_end",
+        "message": {
+            "role": "assistant", "model": "m",
+            "usage": {"input": "NaN", "output": None, "cost": "oops"},
+        },
+    })
+    events = list(p.feed(line))  # must not raise
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.tokens_in == 0 and ev.tokens_out == 0
+    assert ev.output["cost_usd"] == 0.0
 
 
 @pytest.fixture

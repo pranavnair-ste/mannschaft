@@ -21,7 +21,7 @@ from typing import Optional
 import typer
 
 from pi_harness import __version__
-from pi_harness.spec.format import parse_spec_file, spec_storage_dir
+from pi_harness.spec.format import parse_spec_file, spec_path, spec_storage_dir
 from pi_harness.spec.runspec import build_coordinator, spec_to_runspec
 
 app = typer.Typer(
@@ -115,6 +115,16 @@ def launch(
     sync_profile: Optional[str] = typer.Option(
         None, "--sync-profile", help="ClawTeam profile to force when sync_mode is sync_all."
     ),
+    in_place: bool = typer.Option(
+        False, "--in-place",
+        help="Run in the current checkout instead of an isolated run/<id> branch "
+        "(NOT recommended: agents commit to your working branch).",
+    ),
+    keep_alive: bool = typer.Option(
+        False, "--keep-alive",
+        help="On failure, leave the team running for inspection instead of "
+        "snapshotting and tearing it down.",
+    ),
     api_url: Optional[str] = typer.Option(
         None, "--api-url",
         help="If set, POST to <url>/specs/<id>/launch instead of launching in-process.",
@@ -140,19 +150,50 @@ def launch(
         spec, tasks, session_id=session, executor=executor, sync_profile=sync_profile
     )
     coord = _make_coordinator(cfg)
-    handle = coord.launch(run_spec)
+    handle = coord.launch(run_spec, in_place=in_place, keep_alive=keep_alive)
     typer.echo(handle.run_id)
+    if handle.run_branch:
+        typer.echo(f"  isolated on branch: {handle.run_branch}")
 
     if detach:
+        typer.echo(f"  detached — stop it with: pi-harness stop {handle.run_id}")
         return
 
-    result = coord.wait_for_completion(handle, timeout=timeout)
-    coord.on_completion(handle)
+    try:
+        result = coord.wait_for_completion(handle, timeout=timeout)
+        coord.on_completion(handle)
+    except BaseException:
+        # Ctrl-C or any failure during the wait/finalize must not leave a live
+        # team burning credit or a leaked worktree (audit #4). Best-effort
+        # teardown, then re-raise so the original error/interrupt surfaces.
+        try:
+            coord.teardown(handle)
+        except Exception:
+            pass
+        raise
     for task_id, status in sorted(result.terminal_statuses.items()):
         typer.echo(f"  task={task_id} status={status}")
+    if result.success and handle.run_branch:
+        typer.echo(f"work is on branch {handle.run_branch} — diff and merge when ready")
     if not result.success:
         typer.echo("run did not complete successfully", err=True)
         raise typer.Exit(code=1)
+
+
+@app.command()
+def stop(
+    run_id: str = typer.Argument(..., help="Run id to stop (printed by `launch`)."),
+) -> None:
+    """Stop a run: kill its agents (halting credit burn) and clean up its team
+    and run worktree. Use this for a --detach'd run, or to recover after Ctrl-C."""
+    from pi_harness.config import load_config
+
+    cfg = load_config()
+    coord = _make_coordinator(cfg)
+    if not coord.stop(run_id):
+        typer.echo(f"error: unknown run {run_id!r}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"stopped {run_id}")
 
 
 # --------------------------------------------------------------------------- #
@@ -229,6 +270,15 @@ def _specs_dir() -> Path:
     return d
 
 
+def _spec_path_or_die(spec_id: str) -> Path:
+    """Validated spec path (rejects path-traversal / unsafe ids) or clean exit."""
+    try:
+        return spec_path(spec_id)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -240,7 +290,8 @@ def spec_new(
     force: bool = typer.Option(False, "--force", help="Overwrite if exists."),
 ) -> None:
     """Scaffold a new spec at ~/.pi-harness/specs/<id>.md."""
-    target = _specs_dir() / f"{spec_id}.md"
+    target = _spec_path_or_die(spec_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() and not force:
         typer.echo(f"error: {target} already exists (pass --force to overwrite)", err=True)
         raise typer.Exit(code=1)
@@ -264,7 +315,7 @@ def spec_ls() -> None:
 @spec_app.command("show")
 def spec_show(spec_id: str) -> None:
     """Print a spec file."""
-    target = _specs_dir() / f"{spec_id}.md"
+    target = _spec_path_or_die(spec_id)
     if not target.exists():
         typer.echo(f"error: {target} not found", err=True)
         raise typer.Exit(code=1)
@@ -277,7 +328,7 @@ def spec_rm(
     force: bool = typer.Option(False, "--force", help="Skip confirmation."),
 ) -> None:
     """Delete a spec file."""
-    target = _specs_dir() / f"{spec_id}.md"
+    target = _spec_path_or_die(spec_id)
     if not target.exists():
         typer.echo(f"error: {target} not found", err=True)
         raise typer.Exit(code=1)
@@ -291,7 +342,7 @@ def spec_rm(
 @spec_app.command("edit")
 def spec_edit(spec_id: str) -> None:
     """Open the spec in $EDITOR (falls back to vi)."""
-    target = _specs_dir() / f"{spec_id}.md"
+    target = _spec_path_or_die(spec_id)
     if not target.exists():
         typer.echo(f"error: {target} not found", err=True)
         raise typer.Exit(code=1)

@@ -57,6 +57,13 @@ def test_corpus_entries_filter_by_classification(client, cfg):
     assert rows[0]["classification"] == "tactical"
 
 
+def test_corpus_entries_bad_classification_is_400(client, cfg):
+    """An unknown classification must be a clean 400, not an uncaught
+    Classification(...) ValueError -> 500 (audit #22)."""
+    r = client.get("/corpus/entries", params={"classification": "bogus"})
+    assert r.status_code == 400, r.text
+
+
 def test_corpus_entries_default_excludes_archived(client, cfg):
     from pi_harness.corpus.format import Classification
 

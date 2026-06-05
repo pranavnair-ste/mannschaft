@@ -199,3 +199,17 @@ class TestCompletionProtocolInjection:
         leader = dct["template"]["leader"]
         assert "--status completed" in leader["task"]
         assert "'solo'" in leader["task"]
+
+
+def test_run_handle_isolation_fields_default_empty():
+    from datetime import datetime, timezone
+    from pi_harness.topology.base import RunHandle, TopologyMode
+
+    h = RunHandle(
+        run_id="run-1", team_name="team-1",
+        started_at=datetime.now(timezone.utc), topology=TopologyMode.SEQUENTIAL,
+    )
+    assert h.run_branch is None
+    assert h.workspace_repo is None
+    assert h.agent_names == []
+    assert h.keep_alive is False

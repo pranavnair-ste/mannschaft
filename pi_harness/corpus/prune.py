@@ -163,7 +163,8 @@ def prune_by_staleness(
     Args:
         entry: Active or archived entry.
         now: Reference timestamp.
-        recent_run_ids: The most recent ``K`` run ids (for the tactical check).
+        recent_run_ids: Run ids ordered newest-first; the first
+            ``tactical_recent_k`` form the recency window for the tactical check.
         tactical_recent_k: Window size for the tactical check (default 50).
         observational_archive_days: Days after which an unreferenced observational
             entry is archived (default 7).
@@ -196,7 +197,12 @@ def prune_by_staleness(
 
     # --- Tactical: 0 references in last K runs ---------------------------
     if classification == Classification.TACTICAL:
-        recent_set = set(recent_run_ids[-tactical_recent_k:])
+        # recent_run_ids is newest-first (the caller builds it from query_runs,
+        # which orders by latest-event-ts DESC), so the most-recent K are the
+        # HEAD of the list. Slicing the tail took the OLDEST K, which treated
+        # entries used by the newest runs as stale and archived live tactical
+        # knowledge once the corpus had > K runs of history (audit #11).
+        recent_set = set(recent_run_ids[:tactical_recent_k])
         if entry.last_referenced_run_id is None or entry.last_referenced_run_id not in recent_set:
             return [
                 PruneAction(
@@ -311,8 +317,11 @@ def _shingles(text: str, k: int = DEFAULT_DEDUP_SHINGLE_K) -> set[int]:
 
 
 def _jaccard(a: set[int], b: set[int]) -> float:
-    if not a and not b:
-        return 1.0
+    # Empty shingle sets are non-comparable, NOT identical: an empty/whitespace
+    # body must never score as a perfect duplicate of another and get merged
+    # (which archives the loser). Treat any empty side as dissimilar (audit #34).
+    if not a or not b:
+        return 0.0
     inter = len(a & b)
     union = len(a | b)
     return inter / union if union else 0.0
@@ -345,9 +354,16 @@ def prune_by_dedup(
     by_id = {e.id: e for e in entries}
 
     # Score every pair and sort by similarity descending so the strongest
-    # candidate merges first.
+    # candidate merges first. Only entries with at least DEFAULT_DEDUP_SHINGLE_K
+    # meaningful tokens (and a non-empty shingle set) are dedup-eligible —
+    # empty/near-empty bodies are non-comparable and must never be auto-merged
+    # (audit #34).
     pairs: List[tuple[float, str, str]] = []
-    ids = list(by_id.keys())
+    ids = [
+        eid
+        for eid in by_id
+        if len(by_id[eid].body.split()) >= DEFAULT_DEDUP_SHINGLE_K and shingles[eid]
+    ]
     for i in range(len(ids)):
         for j in range(i + 1, len(ids)):
             sim = _jaccard(shingles[ids[i]], shingles[ids[j]])

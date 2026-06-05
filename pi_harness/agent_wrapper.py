@@ -19,6 +19,7 @@ Usage (subprocess from ClawTeam template, future Task 6.4):
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import subprocess
 import sys
@@ -27,6 +28,8 @@ from typing import IO, Iterable
 
 from pi_harness.trajectory.agent_capture import PiEventParser
 from pi_harness.trajectory.store import init_db, write_event
+
+log = logging.getLogger(__name__)
 
 
 LOCAL_PROVIDER_NAME = "harness-local"
@@ -83,7 +86,11 @@ def _build_argv(
             argv.extend(["--provider", provider])
         if model is not None:
             argv.extend(["--model", model])
-        argv.extend(prompt_args)
+        # End-of-options guard so a prompt that begins with '-' / '--' is treated
+        # as the positional prompt, not parsed as pi flags (audit #27).
+        if prompt_args:
+            argv.append("--")
+            argv.extend(prompt_args)
         return argv
     if executor == "codex":
         # codex 0.134.0 CLI flags are not yet verified; pass through verbatim
@@ -109,16 +116,27 @@ def consume_stream(
         init_db(db_path)  # idempotent; ensures the events table exists
     parser = PiEventParser(run_id=run_id, agent_id=agent_id)
     count = 0
+    dropped = 0
     for line in lines:
         for event in parser.feed(line):
             try:
                 write_event(event, db_path=db_path)
                 count += 1
             except Exception:  # noqa: BLE001 -- capture must never break the run
-                pass
+                # Don't crash the agent on a write failure, but never drop the
+                # event silently either: a lost write is a hole in the audit
+                # trail and must be visible in logs (audit #9).
+                dropped += 1
+                log.warning(
+                    "trajectory write_event failed; event dropped from the audit "
+                    "trail (%d dropped so far)", dropped,
+                    exc_info=dropped == 1,
+                )
         if tee_to is not None:
             tee_to.write(line if line.endswith("\n") else line + "\n")
             tee_to.flush()
+    if dropped:
+        log.warning("consume_stream: %d trajectory event(s) dropped due to write failures", dropped)
     return count
 
 
@@ -142,6 +160,14 @@ def run(
     model: str | None = None
     if bucket is not None and executor == "pi":
         provider, model = _resolve_provider_model(bucket)
+    elif bucket is not None:
+        # provider/model routing is only wired for pi; warn so the operator
+        # knows their model selection is NOT applied (audit #28).
+        log.warning(
+            "--bucket=%r is ignored for executor %r; provider/model selection is "
+            "only wired for pi, so the agent uses %s's own defaults.",
+            bucket, executor, executor,
+        )
     argv = _build_argv(executor, prompt_args, provider=provider, model=model)
     proc = subprocess.Popen(
         argv,
@@ -157,8 +183,15 @@ def run(
         consume_stream(
             proc.stdout, run_id=run_id, agent_id=agent_id, db_path=db_path, tee_to=tee,
         )
+    except BaseException:
+        # A failure in capture (or Ctrl-C) must not orphan the child executor —
+        # it would keep running and burning credit. Kill it, then let the error
+        # surface instead of being swallowed by a `return` in finally (#10/#26/#35).
+        proc.kill()
+        raise
     finally:
-        return proc.wait()
+        rc = proc.wait()
+    return rc
 
 
 def main(argv: list[str] | None = None) -> int:

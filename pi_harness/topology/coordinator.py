@@ -13,8 +13,13 @@ from datetime import datetime, timezone
 
 import tomli_w
 
+from pathlib import Path
+
+from pi_harness.clawteam import git_workspace
+
 from pi_harness.corpus.format import Classification
 from pi_harness.clawteam import (
+    ClawTeamCLIError,
     ClawTeamClient,
     ClawTeamRunFailure,
     ClawTeamTimeout,
@@ -86,7 +91,16 @@ class Coordinator:
         self._task_specs: dict[str, list] = {}        # run_id -> TaskDef list; reserved for downstream callers
         #   (e.g. dashboard / trajectory layers) to inspect the seeded DAG
 
-    def launch(self, spec: RunSpec) -> RunHandle:
+    def launch(
+        self,
+        spec: RunSpec,
+        *,
+        in_place: bool = False,
+        keep_alive: bool = False,
+        parent_run_id: str | None = None,
+        branch_from_step: str | None = None,
+        overrides: dict | None = None,
+    ) -> RunHandle:
         # Ensure the trajectory store exists before any capture write.
         from pi_harness.trajectory.store import init_db
         init_db(self._config.trajectory_db_path)
@@ -164,54 +178,110 @@ class Coordinator:
                 replace(pspec, command=wrapper_cmd_str)
             )
 
-        # 5. Register template + launch team via Plan 1.
-        self._clawteam_client.install_template(
-            template_name, tomli_w.dumps(template_dict)
-        )
-        self._clawteam_client.launch_team(
-            template=template_name,
-            team_name=team_name,
-            goal=spec.goal,
-        )
+        # 4c. Isolation (default): create a run/<id> worktree off HEAD and point
+        #     ClawTeam at it so per-agent worktrees fork off run/<id>; the user's
+        #     checked-out branch is never touched. --in-place opts out.
+        run_branch: str | None = None
+        workspace_repo: str | None = None
+        if not in_place:
+            repo = git_workspace.repo_root()
+            # Full uuid (not the last 8 chars): run/<id> branches are kept after
+            # teardown, so an 8-char suffix would eventually collide and fail the
+            # worktree creation (audit #38). run_id is "run-<uuid>".
+            run_branch = f"run/{run_id[4:]}"
+            wt_path = Path(self._config.clawteam_state_dir) / "run-worktrees" / run_id
+            git_workspace.create_run_worktree(repo, branch=run_branch, worktree_path=wt_path)
+            workspace_repo = str(wt_path)
 
-        # 6. Seed the task DAG. Order matters: a task referenced in `blocked_by`
-        #    must exist before its dependent is created.
-        for task in tasks:
-            self._clawteam_client.create_task(
-                team_name=team_name,
-                subject=task.task_id,
-                description=task.goal,
-                owner=task.agent_name,
-                blocked_by=task.blocked_by or None,
-            )
+        # Capture agent names (leader + workers) for later consolidation.
+        agent_names = [leader_block["name"]] + [
+            a["name"] for a in template_dict["template"]["agents"]
+        ]
 
+        # Build the handle + register the run BEFORE the fragile install/launch/
+        # seed steps. If any of those raise, a half-launched run would otherwise
+        # orphan a live, credit-burning team and leak the run worktree; with the
+        # handle already in hand we can finalize the run and tear it down (except).
         handle = RunHandle(
             run_id=run_id,
             team_name=team_name,
             started_at=datetime.now(timezone.utc),
             topology=spec.mode,
             session_id=spec.session_id,
+            run_branch=run_branch,
+            workspace_repo=workspace_repo,
+            agent_names=agent_names,
+            keep_alive=keep_alive,
         )
         self._task_specs[run_id] = tasks
 
-        # Register the run so the dashboard can list it with real status /
-        # topology / lineage, and so branch can reload this RunSpec verbatim.
         from pi_harness.topology.runspec_codec import runspec_to_json
-        from pi_harness.trajectory.runs import register_run
+        from pi_harness.trajectory.runs import mark_run_status, register_run
 
-        register_run(
-            run_id=run_id,
-            spec_id=spec.spec_id,
-            topology=spec.mode.value,
-            sync_mode=spec.sync_mode.value,
-            session_id=spec.session_id,
-            goal=spec.goal,
-            team_name=team_name,
-            started_at=handle.started_at,
-            run_spec_json=runspec_to_json(spec),
-            status="running",
-            db_path=self._config.trajectory_db_path,
-        )
+        try:
+            # Register the run so the dashboard can list it with real status /
+            # topology / lineage, and so branch can reload this RunSpec verbatim.
+            # Lineage is written in this SINGLE insert (branch() threads it in)
+            # rather than a second register_run — no window where the child row
+            # exists without its parent link. A branched child is not tied to the
+            # on-disk spec, so its spec_id is cleared rather than inherited (#39).
+            is_branch = parent_run_id is not None
+            register_run(
+                run_id=run_id,
+                spec_id=None if is_branch else spec.spec_id,
+                topology=spec.mode.value,
+                sync_mode=spec.sync_mode.value,
+                session_id=spec.session_id,
+                goal=spec.goal,
+                team_name=team_name,
+                started_at=handle.started_at,
+                run_spec_json=runspec_to_json(spec),
+                status="running",
+                parent_run_id=parent_run_id,
+                branch_from_step=branch_from_step,
+                overrides=overrides,
+                db_path=self._config.trajectory_db_path,
+            )
+
+            # 5. Register template + launch team via Plan 1.
+            self._clawteam_client.install_template(
+                template_name, tomli_w.dumps(template_dict)
+            )
+            self._clawteam_client.launch_team(
+                template=template_name,
+                team_name=team_name,
+                goal=spec.goal,
+                workspace=workspace_repo is not None,
+                repo=workspace_repo,
+            )
+
+            # 6. Seed the task DAG. Order matters: a task referenced in
+            #    `blocked_by` must exist before its dependent is created.
+            for task in tasks:
+                self._clawteam_client.create_task(
+                    team_name=team_name,
+                    subject=task.task_id,
+                    description=task.goal,
+                    owner=task.agent_name,
+                    blocked_by=task.blocked_by or None,
+                )
+        except Exception:
+            # Half-launched run: stop any credit burn and remove the run worktree
+            # (best-effort; the original error is re-raised for the caller).
+            try:
+                mark_run_status(
+                    run_id,
+                    "failed",
+                    ended_at=datetime.now(timezone.utc),
+                    db_path=self._config.trajectory_db_path,
+                )
+            except Exception:  # noqa: BLE001 — finalize is best-effort
+                pass
+            try:
+                self.teardown(handle)
+            except Exception:  # noqa: BLE001 — teardown is best-effort
+                pass
+            raise
         return handle
 
     def branch(
@@ -227,12 +297,8 @@ class Coordinator:
         with a tweak (model_tier/topology/sync_mode/goal). The parent run must
         have been registered with a stored RunSpec.
         """
-        from pi_harness.topology.runspec_codec import (
-            apply_overrides,
-            runspec_from_json,
-            runspec_to_json,
-        )
-        from pi_harness.trajectory.runs import get_run, register_run
+        from pi_harness.topology.runspec_codec import apply_overrides, runspec_from_json
+        from pi_harness.trajectory.runs import get_run
 
         parent = get_run(parent_run_id, db_path=self._config.trajectory_db_path)
         if parent is None:
@@ -244,26 +310,13 @@ class Coordinator:
         if overrides:
             spec = apply_overrides(spec, overrides)
 
-        handle = self.launch(spec)  # registers the child as running
-
-        # Re-register to stamp lineage onto the freshly-created child row.
-        register_run(
-            run_id=handle.run_id,
-            spec_id=spec.spec_id,
-            topology=spec.mode.value,
-            sync_mode=spec.sync_mode.value,
-            session_id=spec.session_id,
-            goal=spec.goal,
-            team_name=handle.team_name,
-            started_at=handle.started_at,
-            run_spec_json=runspec_to_json(spec),
-            status="running",
+        # Launch registers the child ONCE, with lineage — no no-lineage window.
+        return self.launch(
+            spec,
             parent_run_id=parent_run_id,
             branch_from_step=step_id,
             overrides=overrides or {},
-            db_path=self._config.trajectory_db_path,
         )
-        return handle
 
     def wait_for_completion(self, handle: RunHandle, timeout: float) -> RunResult:
         """Block on Plan 1's wait_for_completion, capturing task transitions into
@@ -290,7 +343,11 @@ class Coordinator:
             success = self._clawteam_client.wait_for_completion(
                 handle.team_name, timeout=timeout, poll_interval=5.0, on_poll=_capture
             )
-        except (ClawTeamTimeout, ClawTeamRunFailure) as exc:
+        except (ClawTeamTimeout, ClawTeamRunFailure, ClawTeamCLIError) as exc:
+            # A transient clawteam CLI failure during polling (raised by
+            # list_tasks -> _run(check=True)) must be captured as a run failure,
+            # not allowed to escape — otherwise the run is never finalized and the
+            # team is left live (credit burn).
             error = exc
             success = False
 
@@ -326,25 +383,129 @@ class Coordinator:
         return result
 
     def on_completion(self, handle: RunHandle) -> None:
-        """Called after wait_for_completion. On a clean success: trigger Plan 4's
-        improve run, then tear down the team. Failed/timed-out runs are left up
-        for debugging."""
+        """Always finalize the run safely.
+
+        Success: run the improve loop, consolidate agent branches into the run
+        branch, then tear the team down.
+        Failure/timeout: snapshot the team for debugging, then tear it down —
+        unless ``handle.keep_alive`` is set, in which case it is left live.
+        """
         result = self._last_result.get(handle.run_id)
-        if result is not None and result.success:
-            self._improve_runner.run_for_completed_run(
-                handle.run_id, self._config, session_id=handle.session_id
+        success = bool(result is not None and result.success)
+        if success:
+            # Consolidate FIRST (merge agent branches into the run branch) so the
+            # work is preserved even if the improve loop later fails, then run
+            # improve, then ALWAYS tear down — a raise from improve OR consolidate
+            # must never leave a live, credit-burning team or a leaked worktree.
+            try:
+                conflicts = self.consolidate(handle)
+                if conflicts:
+                    print(
+                        f"warning: run {handle.run_id}: agents {conflicts} did not "
+                        f"merge cleanly into {handle.run_branch}; resolve manually "
+                        "before merging the run branch.",
+                        file=sys.stderr,
+                    )
+                self._improve_runner.run_for_completed_run(
+                    handle.run_id, self._config, session_id=handle.session_id
+                )
+            finally:
+                self.teardown(handle)
+            return
+        # Failure / timeout: preserve full state for debugging, then stop the
+        # credit burn. Snapshot first (best-effort — a failing snapshot must
+        # never skip teardown and leave the team live), unless keep_alive.
+        try:
+            self._clawteam_client.snapshot_team(
+                handle.team_name, tag=f"failed-{handle.run_id[-8:]}"
             )
+        except Exception:  # noqa: BLE001 — snapshot is best-effort, teardown is not
+            pass
+        if not handle.keep_alive:
             self.teardown(handle)
 
     def teardown(self, handle: RunHandle) -> None:
-        """Stop the run's agents and delete its team data.
+        """Stop the run's agents and delete its team data, then remove the run
+        worktree (the run/<id> branch is kept — that's where the work lives).
 
-        Kills the tmux session first (so agents stop immediately and stop
-        burning credit), then removes the team record. Safe to call repeatedly.
-        Callable directly; also invoked by on_completion on a clean success.
+        Kills the tmux session first (so agents stop immediately and stop burning
+        credit), then removes the team record, then the worktree. Safe to call
+        repeatedly.
         """
-        self._clawteam_client.kill_tmux_session(handle.team_name)
-        self._clawteam_client.cleanup_team(handle.team_name)
+        # Each step is best-effort and independent so a failure in one never
+        # skips the others. In particular cleanup_team uses check=True and can
+        # raise (e.g. on a half-launched run where the team was never created),
+        # which previously skipped the run-worktree removal below and leaked it.
+        # Kill the tmux session first (that's what stops the credit burn).
+        try:
+            self._clawteam_client.kill_tmux_session(handle.team_name)
+        except Exception:  # noqa: BLE001 — teardown must never raise
+            pass
+        try:
+            self._clawteam_client.cleanup_team(handle.team_name)
+        except Exception:  # noqa: BLE001 — teardown must never raise
+            pass
+        if handle.workspace_repo:
+            try:
+                git_workspace.remove_run_worktree(
+                    git_workspace.repo_root(), Path(handle.workspace_repo)
+                )
+            except Exception:  # noqa: BLE001 — teardown must never raise
+                pass
+
+    def stop(self, run_id: str) -> bool:
+        """Tear down a (possibly detached) run by id: kill its team to stop the
+        credit burn and remove its run worktree, then mark it cancelled.
+
+        Reconstructs the worktree path deterministically (it is always
+        ``clawteam_state_dir/run-worktrees/<run_id>``); ``remove_run_worktree``
+        no-ops if the run was launched ``--in-place`` (no worktree). Returns
+        False if ``run_id`` is unknown. Safe to call repeatedly.
+        """
+        from pi_harness.trajectory.runs import get_run, mark_run_status
+
+        row = get_run(run_id, db_path=self._config.trajectory_db_path)
+        if row is None:
+            return False
+        topology = (
+            TopologyMode(row["topology"]) if row.get("topology") else TopologyMode.SEQUENTIAL
+        )
+        handle = RunHandle(
+            run_id=run_id,
+            team_name=row["team_name"],
+            started_at=datetime.now(timezone.utc),
+            topology=topology,
+            run_branch=f"run/{run_id[4:]}",
+            workspace_repo=str(
+                Path(self._config.clawteam_state_dir) / "run-worktrees" / run_id
+            ),
+        )
+        self.teardown(handle)
+        mark_run_status(
+            run_id, "cancelled",
+            ended_at=datetime.now(timezone.utc),
+            db_path=self._config.trajectory_db_path,
+        )
+        return True
+
+    def consolidate(self, handle: RunHandle) -> list[str]:
+        """Merge each agent's branch into the run branch (default target).
+
+        Runs in launch order (leader first). A conflicting merge is recorded and
+        skipped — never force-resolved. Returns the list of agent names whose
+        merge conflicted. No-op (returns []) for in-place runs (no run_branch).
+        """
+        if handle.run_branch is None:
+            return []
+        conflicts: list[str] = []
+        for agent_name in handle.agent_names:
+            result = self._clawteam_client.merge_workspace(
+                handle.team_name, agent_name,
+                repo=handle.workspace_repo, target=handle.run_branch,
+            )
+            if getattr(result, "returncode", 0) != 0:
+                conflicts.append(agent_name)
+        return conflicts
 
     def _apply_sync_mode(self, template_dict: dict, spec: RunSpec) -> None:
         """In SYNC_ALL mode, force every agent (leader + workers) onto a
