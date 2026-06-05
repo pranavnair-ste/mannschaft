@@ -336,6 +336,18 @@ class TestCoordinatorTeardown:
         names = [c[0] for c in mock_clawteam_client.mock_calls]
         assert names.index("snapshot_team") < names.index("kill_tmux_session")
 
+    def test_on_completion_failure_tears_down_even_if_snapshot_raises(
+        self, coord, basic_spec, mock_clawteam_client
+    ):
+        """A raising snapshot on the failure path must not skip teardown and
+        leave the team live (verification follow-up)."""
+        handle = coord.launch(basic_spec)
+        coord._last_result[handle.run_id] = MagicMock(success=False)
+        mock_clawteam_client.snapshot_team.side_effect = RuntimeError("snapshot boom")
+        coord.on_completion(handle)  # must not raise
+        mock_clawteam_client.kill_tmux_session.assert_called_once_with(handle.team_name)
+        mock_clawteam_client.cleanup_team.assert_called_once_with(handle.team_name)
+
     def test_on_completion_keep_alive_skips_teardown_on_failure(self, coord, basic_spec, mock_clawteam_client):
         with patch("pi_harness.topology.coordinator.git_workspace"):
             handle = coord.launch(basic_spec, keep_alive=True)

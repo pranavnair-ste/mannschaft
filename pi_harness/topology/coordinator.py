@@ -413,10 +413,14 @@ class Coordinator:
                 self.teardown(handle)
             return
         # Failure / timeout: preserve full state for debugging, then stop the
-        # credit burn (snapshot first so it survives teardown).
-        self._clawteam_client.snapshot_team(
-            handle.team_name, tag=f"failed-{handle.run_id[-8:]}"
-        )
+        # credit burn. Snapshot first (best-effort — a failing snapshot must
+        # never skip teardown and leave the team live), unless keep_alive.
+        try:
+            self._clawteam_client.snapshot_team(
+                handle.team_name, tag=f"failed-{handle.run_id[-8:]}"
+            )
+        except Exception:  # noqa: BLE001 — snapshot is best-effort, teardown is not
+            pass
         if not handle.keep_alive:
             self.teardown(handle)
 
