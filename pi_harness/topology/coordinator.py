@@ -19,6 +19,7 @@ from pi_harness.clawteam import git_workspace
 
 from pi_harness.corpus.format import Classification
 from pi_harness.clawteam import (
+    ClawTeamCLIError,
     ClawTeamClient,
     ClawTeamRunFailure,
     ClawTeamTimeout,
@@ -185,29 +186,10 @@ class Coordinator:
             a["name"] for a in template_dict["template"]["agents"]
         ]
 
-        # 5. Register template + launch team via Plan 1.
-        self._clawteam_client.install_template(
-            template_name, tomli_w.dumps(template_dict)
-        )
-        self._clawteam_client.launch_team(
-            template=template_name,
-            team_name=team_name,
-            goal=spec.goal,
-            workspace=workspace_repo is not None,
-            repo=workspace_repo,
-        )
-
-        # 6. Seed the task DAG. Order matters: a task referenced in `blocked_by`
-        #    must exist before its dependent is created.
-        for task in tasks:
-            self._clawteam_client.create_task(
-                team_name=team_name,
-                subject=task.task_id,
-                description=task.goal,
-                owner=task.agent_name,
-                blocked_by=task.blocked_by or None,
-            )
-
+        # Build the handle + register the run BEFORE the fragile install/launch/
+        # seed steps. If any of those raise, a half-launched run would otherwise
+        # orphan a live, credit-burning team and leak the run worktree; with the
+        # handle already in hand we can finalize the run and tear it down (except).
         handle = RunHandle(
             run_id=run_id,
             team_name=team_name,
@@ -221,24 +203,65 @@ class Coordinator:
         )
         self._task_specs[run_id] = tasks
 
-        # Register the run so the dashboard can list it with real status /
-        # topology / lineage, and so branch can reload this RunSpec verbatim.
         from pi_harness.topology.runspec_codec import runspec_to_json
-        from pi_harness.trajectory.runs import register_run
+        from pi_harness.trajectory.runs import mark_run_status, register_run
 
-        register_run(
-            run_id=run_id,
-            spec_id=spec.spec_id,
-            topology=spec.mode.value,
-            sync_mode=spec.sync_mode.value,
-            session_id=spec.session_id,
-            goal=spec.goal,
-            team_name=team_name,
-            started_at=handle.started_at,
-            run_spec_json=runspec_to_json(spec),
-            status="running",
-            db_path=self._config.trajectory_db_path,
-        )
+        try:
+            # Register the run so the dashboard can list it with real status /
+            # topology / lineage, and so branch can reload this RunSpec verbatim.
+            register_run(
+                run_id=run_id,
+                spec_id=spec.spec_id,
+                topology=spec.mode.value,
+                sync_mode=spec.sync_mode.value,
+                session_id=spec.session_id,
+                goal=spec.goal,
+                team_name=team_name,
+                started_at=handle.started_at,
+                run_spec_json=runspec_to_json(spec),
+                status="running",
+                db_path=self._config.trajectory_db_path,
+            )
+
+            # 5. Register template + launch team via Plan 1.
+            self._clawteam_client.install_template(
+                template_name, tomli_w.dumps(template_dict)
+            )
+            self._clawteam_client.launch_team(
+                template=template_name,
+                team_name=team_name,
+                goal=spec.goal,
+                workspace=workspace_repo is not None,
+                repo=workspace_repo,
+            )
+
+            # 6. Seed the task DAG. Order matters: a task referenced in
+            #    `blocked_by` must exist before its dependent is created.
+            for task in tasks:
+                self._clawteam_client.create_task(
+                    team_name=team_name,
+                    subject=task.task_id,
+                    description=task.goal,
+                    owner=task.agent_name,
+                    blocked_by=task.blocked_by or None,
+                )
+        except Exception:
+            # Half-launched run: stop any credit burn and remove the run worktree
+            # (best-effort; the original error is re-raised for the caller).
+            try:
+                mark_run_status(
+                    run_id,
+                    "failed",
+                    ended_at=datetime.now(timezone.utc),
+                    db_path=self._config.trajectory_db_path,
+                )
+            except Exception:  # noqa: BLE001 — finalize is best-effort
+                pass
+            try:
+                self.teardown(handle)
+            except Exception:  # noqa: BLE001 — teardown is best-effort
+                pass
+            raise
         return handle
 
     def branch(
@@ -317,7 +340,11 @@ class Coordinator:
             success = self._clawteam_client.wait_for_completion(
                 handle.team_name, timeout=timeout, poll_interval=5.0, on_poll=_capture
             )
-        except (ClawTeamTimeout, ClawTeamRunFailure) as exc:
+        except (ClawTeamTimeout, ClawTeamRunFailure, ClawTeamCLIError) as exc:
+            # A transient clawteam CLI failure during polling (raised by
+            # list_tasks -> _run(check=True)) must be captured as a run failure,
+            # not allowed to escape — otherwise the run is never finalized and the
+            # team is left live (credit burn).
             error = exc
             success = False
 
@@ -363,11 +390,24 @@ class Coordinator:
         result = self._last_result.get(handle.run_id)
         success = bool(result is not None and result.success)
         if success:
-            self._improve_runner.run_for_completed_run(
-                handle.run_id, self._config, session_id=handle.session_id
-            )
-            self.consolidate(handle)
-            self.teardown(handle)
+            # Consolidate FIRST (merge agent branches into the run branch) so the
+            # work is preserved even if the improve loop later fails, then run
+            # improve, then ALWAYS tear down — a raise from improve OR consolidate
+            # must never leave a live, credit-burning team or a leaked worktree.
+            try:
+                conflicts = self.consolidate(handle)
+                if conflicts:
+                    print(
+                        f"warning: run {handle.run_id}: agents {conflicts} did not "
+                        f"merge cleanly into {handle.run_branch}; resolve manually "
+                        "before merging the run branch.",
+                        file=sys.stderr,
+                    )
+                self._improve_runner.run_for_completed_run(
+                    handle.run_id, self._config, session_id=handle.session_id
+                )
+            finally:
+                self.teardown(handle)
             return
         # Failure / timeout: preserve full state for debugging, then stop the
         # credit burn (snapshot first so it survives teardown).

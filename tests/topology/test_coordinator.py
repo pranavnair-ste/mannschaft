@@ -31,6 +31,7 @@ def basic_spec():
 def coord(mock_clawteam_client, mock_corpus_reader, mock_improve_runner, tmp_path):
     cfg = MagicMock()
     cfg.trajectory_db_path = tmp_path / "trajectory.db"
+    cfg.clawteam_state_dir = tmp_path / "state"  # real absolute path, not a Mock
     cfg.reasoning_model = "gpt-5"
     cfg.fast_model = "gpt-5-mini"
     return Coordinator(
@@ -265,6 +266,21 @@ class TestCoordinatorWaitAndImprove:
         assert out.success is False
         assert isinstance(out.error, ClawTeamRunFailure)
 
+    def test_wait_for_completion_captures_cli_error_as_failure(self, coord, basic_spec):
+        """A transient ClawTeamCLIError raised by the poll loop (list_tasks) must
+        be captured as a run failure, not allowed to escape and leave the team
+        live + the run un-finalized."""
+        from pi_harness.clawteam import ClawTeamCLIError
+
+        handle = coord.launch(basic_spec)
+        coord._clawteam_client.wait_for_completion.side_effect = ClawTeamCLIError(
+            ["clawteam", "task", "list"], 1, "transient boom"
+        )
+        coord._clawteam_client.list_tasks.return_value = []
+        out = coord.wait_for_completion(handle, timeout=60)
+        assert out.success is False
+        assert isinstance(out.error, ClawTeamCLIError)
+
     def test_on_completion_calls_improve_runner_once_on_success(self, coord, basic_spec):
         handle = coord.launch(basic_spec)
         coord._clawteam_client.wait_for_completion.return_value = True
@@ -339,6 +355,50 @@ class TestCoordinatorTeardown:
         mock_clawteam_client.kill_tmux_session.assert_called_once()  # then torn down
         names = [c[0] for c in mock_clawteam_client.mock_calls]
         assert names.index("merge_workspace") < names.index("kill_tmux_session")
+
+    def test_on_completion_success_tears_down_even_if_improve_raises(
+        self, coord, basic_spec, mock_clawteam_client
+    ):
+        """On the success path a raising improve loop must NOT skip teardown —
+        otherwise the team stays live (credit burn) and the worktree leaks."""
+        mock_clawteam_client.merge_workspace.return_value = MagicMock(returncode=0)
+        handle = coord.launch(basic_spec)
+        coord._last_result[handle.run_id] = MagicMock(success=True)
+        coord._improve_runner.run_for_completed_run.side_effect = RuntimeError("improve boom")
+        with pytest.raises(RuntimeError, match="improve boom"):
+            coord.on_completion(handle)
+        # teardown ran despite the improve failure.
+        mock_clawteam_client.kill_tmux_session.assert_called_once_with(handle.team_name)
+        mock_clawteam_client.cleanup_team.assert_called_once_with(handle.team_name)
+
+    def test_on_completion_warns_on_consolidation_conflicts(
+        self, coord, basic_spec, mock_clawteam_client, capsys
+    ):
+        """Consolidation conflicts must be surfaced (not silently discarded) and
+        teardown must still run."""
+        handle = coord.launch(basic_spec)
+        coord._last_result[handle.run_id] = MagicMock(success=True)
+        loser = handle.agent_names[-1]
+
+        def merge(team, agent, *, repo, target):
+            return MagicMock(returncode=1 if agent == loser else 0)
+
+        mock_clawteam_client.merge_workspace.side_effect = merge
+        coord.on_completion(handle)
+        err = capsys.readouterr().err
+        assert "did not merge cleanly" in err and loser in err
+        mock_clawteam_client.kill_tmux_session.assert_called_once()
+
+    def test_launch_tears_down_on_create_task_failure(
+        self, coord, basic_spec, mock_clawteam_client
+    ):
+        """If task seeding fails after the team launches, the half-launched team
+        must be torn down (not orphaned live) and the error re-raised."""
+        mock_clawteam_client.create_task.side_effect = RuntimeError("seed boom")
+        with pytest.raises(RuntimeError, match="seed boom"):
+            coord.launch(basic_spec)
+        assert mock_clawteam_client.kill_tmux_session.called
+        assert mock_clawteam_client.cleanup_team.called
 
 
 class TestCoordinatorConsolidate:

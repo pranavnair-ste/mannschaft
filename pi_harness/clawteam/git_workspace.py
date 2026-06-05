@@ -28,6 +28,19 @@ def repo_root(start: Path | str | None = None) -> Path:
 
 def create_run_worktree(repo: Path, *, branch: str, worktree_path: Path) -> None:
     """Create ``worktree_path`` as a new worktree on a new ``branch`` off HEAD."""
+    worktree_path = Path(worktree_path)
+    # Fail fast on a non-absolute path. A relative path would create the worktree
+    # *inside* ``repo`` (the user's checked-out tree) and register it in the real
+    # ``.git`` — the exact "don't trash my branch" hazard this isolation exists to
+    # prevent. In practice this also catches a misconfigured ``clawteam_state_dir``
+    # (e.g. a Mock leaking through in tests), which previously littered the repo
+    # with hundreds of ``run/<id>`` worktrees/branches under ``MagicMock/...``.
+    if not worktree_path.is_absolute():
+        raise ValueError(
+            f"run worktree path must be absolute, got {str(worktree_path)!r}; "
+            "a relative path would create the worktree inside the repo being "
+            "isolated. Check that config.clawteam_state_dir is a real absolute path."
+        )
     worktree_path.parent.mkdir(parents=True, exist_ok=True)
     _git(["worktree", "add", "-b", branch, str(worktree_path), "HEAD"], repo)
 
