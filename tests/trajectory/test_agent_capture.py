@@ -16,6 +16,41 @@ from pi_harness.trajectory.schema import TrajectoryEvent
 SAMPLE = Path(__file__).resolve().parents[2] / "docs" / "captures" / "pi-stdout-json.ndjson"
 
 
+def test_turn_message_captures_text_and_thinking():
+    line = json.dumps({
+        "type": "turn_end",
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-8",
+            "stopReason": "stop",
+            "usage": {"input": 100, "output": 20, "cost": {"total": 0.01}},
+            "content": [
+                {"type": "thinking", "thinking": "weighing options", "thinkingSignature": "sig"},
+                {"type": "text", "text": "Here is the answer."},
+            ],
+        },
+    })
+    parser = PiEventParser(run_id="r", agent_id="a")
+    events = list(parser.feed(line))
+    assert len(events) == 1
+    out = events[0].output
+    assert out["text"] == "Here is the answer."
+    assert out["thinking"] == "weighing options"
+    assert out["cost_usd"] == 0.01  # existing fields preserved
+
+
+def test_turn_message_text_empty_on_tool_only_turn():
+    line = json.dumps({
+        "type": "turn_end",
+        "message": {"role": "assistant", "model": "gpt-5.4-mini", "stopReason": "toolUse",
+                    "usage": {"input": 5, "output": 5},
+                    "content": [{"type": "toolCall", "id": "c1", "name": "ls", "arguments": {}}]},
+    })
+    out = list(PiEventParser(run_id="r", agent_id="a").feed(line))[0].output
+    assert out["text"] == ""        # tool-only turns legitimately have no prose
+    assert out["thinking"] == ""
+
+
 def test_turn_message_tolerates_malformed_usage():
     """Malformed usage/cost numbers must not crash the parser and abort the
     whole capture stream (#29)."""

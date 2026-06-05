@@ -43,6 +43,26 @@ def _safe_float(value: object, default: float = 0.0) -> float:
         return default
 
 
+def _assistant_text_and_thinking(msg: dict) -> tuple[str, str]:
+    """Pull user-facing text and (usually empty) thinking from message.content[].
+
+    content parts: {"type":"text","text":...}, {"type":"thinking","thinking":...},
+    {"type":"toolCall",...}. Tool-only turns have no text part -> "". Defensive:
+    malformed content must never raise (audit #29)."""
+    content = msg.get("content")
+    if not isinstance(content, list):
+        return "", ""
+    texts, thinks = [], []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text" and isinstance(part.get("text"), str):
+            texts.append(part["text"])
+        elif part.get("type") == "thinking" and isinstance(part.get("thinking"), str):
+            thinks.append(part["thinking"])
+    return "".join(texts), "".join(thinks)
+
+
 class PiEventParser:
     """Stream parser: feed one NDJSON line at a time, yield TrajectoryEvents."""
 
@@ -142,6 +162,7 @@ class PiEventParser:
         cost = cost_obj.get("total", 0.0) if isinstance(cost_obj, dict) else 0.0
         # Coerce defensively: a malformed usage/cost number from pi must not
         # raise and abort the whole capture stream (audit #29).
+        text, thinking = _assistant_text_and_thinking(msg)
         return TrajectoryEvent(
             run_id=self.run_id,
             agent_id=self.agent_id,
@@ -154,6 +175,8 @@ class PiEventParser:
                 "cost_usd": _safe_float(cost),
                 "stopReason": msg.get("stopReason"),
                 "responseId": msg.get("responseId"),
+                "text": text,
+                "thinking": thinking,
             },
             duration_ms=0,
             tokens_in=_safe_int(usage.get("input", 0)),
