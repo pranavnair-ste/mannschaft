@@ -118,15 +118,43 @@ def test_backfill_run_counts_fork_rejections(monkeypatch):
     assert result.rejected == 4
 
 
-def test_translate_custom_event():
-    """task_transition / guide_fired / sensor_fired -> a single 'custom' envelope
-    carrying custom_type + the raw input/output (spec §6)."""
-    ev = _ev(classification="task_transition", step_id="task-1",
-             input={"task": "X"}, output={"status": "done"})
-    env = bridge.translate(ev, CTX, seq=2)
-    assert env["type"] == "custom"
-    assert env["payload"]["custom_type"] == "task_transition"
-    assert env["payload"]["data"] == {"input": {"task": "X"}, "output": {"status": "done"}}
+def test_translate_task_transition_normalizes_from_to():
+    """task_transition -> custom with a flat, self-describing payload (from/to/
+    task_id/subject) so the fork renders 'task X: in_progress -> completed'
+    without knowing mannschaft/ClawTeam internals. Mirrors the REAL producer
+    shape in capture.diff_task_states (input.prev_status, output.status+raw)."""
+    ev = _ev(classification="task_transition", step_id="clawteam-t1-completed",
+             agent_id="builder",
+             input={"task_id": "t1", "prev_status": "in_progress"},
+             output={"task_id": "t1", "status": "completed",
+                     "raw": {"subject": "seq-001-builder", "description": "Write smoke_out.txt"}})
+    p = bridge.translate(ev, CTX, seq=2)["payload"]
+    assert p["custom_type"] == "task_transition"
+    assert p["data"] == {
+        "task_id": "t1", "from": "in_progress", "to": "completed",
+        "subject": "seq-001-builder", "description": "Write smoke_out.txt",
+    }
+
+
+def test_translate_task_transition_first_sighting_has_null_from():
+    """A never-seen task has prev_status=None (producer seeds the run); 'from' is
+    None so the fork can render it as a fresh task."""
+    ev = _ev(classification="task_transition",
+             input={"task_id": "t2", "prev_status": None},
+             output={"task_id": "t2", "status": "pending", "raw": {"subject": "seq-000-leader"}})
+    p = bridge.translate(ev, CTX, seq=0)["payload"]
+    assert p["data"]["from"] is None
+    assert p["data"]["to"] == "pending"
+    assert p["data"]["subject"] == "seq-000-leader"
+
+
+def test_translate_custom_other_kinds_keep_raw_io():
+    """guide_fired / sensor_fired (no normalized schema yet) keep their raw
+    input/output so no detail is lost."""
+    ev = _ev(classification="guide_fired", input={"guide": "g1"}, output={"detail": "x"})
+    p = bridge.translate(ev, CTX, seq=1)["payload"]
+    assert p["custom_type"] == "guide_fired"
+    assert p["data"] == {"input": {"guide": "g1"}, "output": {"detail": "x"}}
 
 
 def test_translate_tool_result_falls_back_to_json_when_no_content():

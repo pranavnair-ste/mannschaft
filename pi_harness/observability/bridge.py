@@ -155,7 +155,24 @@ def translate(ev: TrajectoryEvent, ctx: RunContext, *, seq: int, row_id: int = 0
     # task_transition / guide_fired / sensor_fired -> custom
     eid = _eid(ctx, ev.agent_id, "custom", row_id, ev.classification)
     return _base(ev, ctx, "custom", seq, eid, {
-        "custom_type": ev.classification, "data": {"input": inp, "output": out}})
+        "custom_type": ev.classification, "data": _custom_data(ev.classification, inp, out)})
+
+
+def _custom_data(classification: str, inp: dict, out: dict) -> dict:
+    """Self-describing payload for custom events so the fork renders them without
+    knowing mannschaft/ClawTeam internals. task_transition is flattened to
+    from/to/task_id/subject (and the bulky ``raw`` task object is dropped); other
+    kinds keep their raw input/output until they get a normalized schema."""
+    if classification == "task_transition":
+        raw = out.get("raw") if isinstance(out.get("raw"), dict) else {}
+        return {
+            "task_id": out.get("task_id") or inp.get("task_id") or "",
+            "from": inp.get("prev_status"),   # None for a never-seen task
+            "to": out.get("status"),
+            "subject": raw.get("subject") or "",
+            "description": raw.get("description") or "",
+        }
+    return {"input": inp, "output": out}
 
 
 def _synth(ctx: RunContext, agent_id: str, ts, etype: str, seq: int, kind: str, payload: dict) -> dict:
