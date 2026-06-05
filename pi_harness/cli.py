@@ -203,14 +203,20 @@ def observe(
     token: Optional[str] = typer.Option(None, "--token", help="Bearer token (default OBS_AUTH_TOKEN or devtoken)."),
 ) -> None:
     """Translate a run's trajectory rows and POST them to the pi-observability fork."""
+    import urllib.error
+
     from pi_harness.observability import bridge
 
-    n = bridge.backfill_run(
-        run,
-        url=url or bridge.DEFAULT_URL,
-        token=token or bridge.DEFAULT_TOKEN,
+    target = url or bridge.DEFAULT_URL
+    try:
+        result = bridge.backfill_run(run, url=target, token=token or bridge.DEFAULT_TOKEN)
+    except urllib.error.URLError as exc:
+        typer.echo(f"error: could not reach observability fork at {target}: {exc}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(
+        f"bridged {result.sent} events for {run} "
+        f"({result.ingested} ingested, {result.rejected} already present)"
     )
-    typer.echo(f"bridged {n} events for {run}")
 
 
 # --------------------------------------------------------------------------- #

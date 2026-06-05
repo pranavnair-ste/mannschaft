@@ -10,10 +10,11 @@ def test_observe_calls_backfill(monkeypatch):
     def fake_backfill(run_id, **kw):
         calls["run"] = run_id
         calls["kw"] = kw
-        return 42
+        return bridge.BackfillResult(sent=42, ingested=40, rejected=2)
 
     monkeypatch.setattr(bridge, "backfill_run", fake_backfill)
     result = CliRunner().invoke(app, ["observe", "--run", "run-abc"])
     assert result.exit_code == 0
     assert calls["run"] == "run-abc"
-    assert "42" in result.stdout
+    assert "42" in result.stdout      # sent count
+    assert "40 ingested" in result.stdout

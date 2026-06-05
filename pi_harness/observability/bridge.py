@@ -52,18 +52,49 @@ def _provider_for(model: str) -> str:
     return "unknown"
 
 
-def _truncate(s: str) -> str:
-    return s if len(s.encode()) <= MAX_TEXT else s.encode()[:MAX_TEXT].decode(errors="ignore")
+def _as_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
-def _result_text(output: dict) -> str:
+def _as_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _truncate(s: Any) -> str:
+    """Byte-cap a string to the fork's field limit. Coerces non-str defensively:
+    output comes from JSON in SQLite, so a corrupted row must never abort a whole
+    run's backfill (audit #29)."""
+    if not isinstance(s, str):
+        s = "" if s is None else str(s)
+    encoded = s.encode()
+    if len(encoded) <= MAX_TEXT:
+        return s
+    return encoded[:MAX_TEXT].decode(errors="ignore")
+
+
+def _was_truncated(s: str) -> bool:
+    return isinstance(s, str) and len(s.encode()) > MAX_TEXT
+
+
+def _result_raw(output: Any) -> str:
+    """Best-effort human text from a tool_result output blob. Tolerates any shape
+    json.loads could yield (audit #29): non-dict output, content not a list, or
+    parts missing/with non-str 'text'."""
+    if not isinstance(output, dict):
+        return json.dumps(output, default=str)
     content = output.get("content")
     if isinstance(content, list):
         parts = [p.get("text", "") for p in content if isinstance(p, dict)]
-        joined = "".join(p for p in parts if p)
+        joined = "".join(p for p in parts if isinstance(p, str) and p)
         if joined:
-            return _truncate(joined)
-    return _truncate(json.dumps(output))
+            return joined
+    return json.dumps(output, default=str)
 
 
 def _eid(ctx: RunContext, agent_id: str, *parts: Any) -> str:
@@ -89,34 +120,42 @@ def _base(ev: TrajectoryEvent, ctx: RunContext, etype: str, seq: int, eid: str, 
 
 def translate(ev: TrajectoryEvent, ctx: RunContext, *, seq: int, row_id: int = 0) -> dict:
     """One trajectory row -> one fork envelope. row_id makes the event_id unique
-    per source row; same (row_id, seq) -> same event_id (idempotent)."""
-    out = dict(ev.output)
+    per source row; same (row_id, seq) -> same event_id (idempotent).
+
+    `output`/`input` are JSON-decoded from SQLite and may be any shape, so every
+    access is defensive — a single corrupted row can't abort the run (audit #29)."""
+    out = dict(ev.output) if isinstance(ev.output, dict) else {}
+    inp = dict(ev.input) if isinstance(ev.input, dict) else {}
     if ev.classification == "tool_call":
         eid = _eid(ctx, ev.agent_id, "tool_call", row_id, ev.step_id)
         return _base(ev, ctx, "tool_call", seq, eid, {
             "tool_call_id": ev.step_id, "tool_name": ev.tool,
-            "args": dict(ev.input), "args_truncated": False})
+            "args": inp, "args_truncated": False})
     if ev.classification == "tool_result":
         eid = _eid(ctx, ev.agent_id, "tool_result", row_id, ev.step_id)
+        raw = _result_raw(out)
         return _base(ev, ctx, "tool_result", seq, eid, {
             "tool_call_id": ev.step_id, "tool_name": ev.tool,
-            "content_text": _result_text(out), "content_truncated": False,
+            "content_text": _truncate(raw), "content_truncated": _was_truncated(raw),
             "is_error": ev.outcome == "error"})
     if ev.classification == "message":
         eid = _eid(ctx, ev.agent_id, "message", row_id, ev.step_id)
+        text = out.get("text", "")
+        thinking = out.get("thinking", "")
+        stop = out.get("stopReason")
         return _base(ev, ctx, "assistant_message", seq, eid, {
-            "text": _truncate(out.get("text", "") or ""),
-            "thinking": _truncate(out.get("thinking", "") or ""),
+            "text": _truncate(text if isinstance(text, str) else ""),
+            "thinking": _truncate(thinking if isinstance(thinking, str) else ""),
             "tool_call_ids": [],
-            "stop_reason": out.get("stopReason") or "stop",
-            "usage": {"input": ev.tokens_in, "output": ev.tokens_out,
+            "stop_reason": stop if isinstance(stop, str) and stop else "stop",
+            "usage": {"input": _as_int(ev.tokens_in), "output": _as_int(ev.tokens_out),
                       "cache_read": 0, "cache_write": 0,
-                      "total_tokens": ev.tokens_in + ev.tokens_out,
-                      "cost_total": out.get("cost_usd", 0.0)}})
+                      "total_tokens": _as_int(ev.tokens_in) + _as_int(ev.tokens_out),
+                      "cost_total": _as_float(out.get("cost_usd", 0.0))}})
     # task_transition / guide_fired / sensor_fired -> custom
     eid = _eid(ctx, ev.agent_id, "custom", row_id, ev.classification)
     return _base(ev, ctx, "custom", seq, eid, {
-        "custom_type": ev.classification, "data": {"input": dict(ev.input), "output": out}})
+        "custom_type": ev.classification, "data": {"input": inp, "output": out}})
 
 
 def _synth(ctx: RunContext, agent_id: str, ts, etype: str, seq: int, kind: str, payload: dict) -> dict:
@@ -164,13 +203,26 @@ def envelopes_for_run(rows: list[tuple[int, TrajectoryEvent]], ctx: RunContext) 
     return out
 
 
+@dataclass(frozen=True)
+class BackfillResult:
+    """Honest accounting: how many envelopes we shipped vs. how many the fork
+    actually stored. The remainder were already present — idempotent dedupe via
+    the deterministic event_ids — so a re-run reports sent>0, ingested==0."""
+    sent: int
+    ingested: int
+    rejected: int
+
+
 def post_events(envelopes: list[dict], url: str, token: str) -> dict:
-    """POST a batch to the fork's /events. Caller batches to <=50."""
+    """POST a batch to the fork's /events; return its {"ingested", "rejected"}.
+    Raises urllib.error.URLError/HTTPError on transport failure or non-2xx — a
+    backfill against an unreachable fork must fail loudly, not silently."""
     req = urllib.request.Request(
         f"{url}/events", data=json.dumps(envelopes).encode(), method="POST",
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
     with urllib.request.urlopen(req) as resp:
-        return json.load(resp)
+        body = json.load(resp)
+    return body if isinstance(body, dict) else {}
 
 
 def _read_rows(run_id: str, db_path=None) -> list[tuple[int, TrajectoryEvent]]:
@@ -183,11 +235,18 @@ def _load_run_context(run_id: str, db_path=None) -> RunContext:
 
 
 def backfill_run(run_id: str, *, url: str = DEFAULT_URL, token: str = DEFAULT_TOKEN,
-                 db_path=None) -> int:
-    """Translate ALL rows of run_id and POST them (batches of 50). Idempotent."""
+                 db_path=None) -> BackfillResult:
+    """Translate ALL rows of run_id and POST them (batches of 50), tallying the
+    fork's real ingest/reject counts. Idempotent: re-running ships the same
+    deterministic event_ids, which the fork dedupes (sent>0, ingested==0)."""
     ctx = _load_run_context(run_id, db_path=db_path)
     rows = _read_rows(run_id, db_path=db_path)
     envs = envelopes_for_run(rows, ctx)
+    ingested = 0
+    rejected = 0
     for i in range(0, len(envs), 50):
-        post_events(envs[i:i + 50], url, token)
-    return len(envs)
+        resp = post_events(envs[i:i + 50], url, token)
+        ingested += _as_int(resp.get("ingested", 0))
+        rej = resp.get("rejected")
+        rejected += len(rej) if isinstance(rej, list) else 0
+    return BackfillResult(sent=len(envs), ingested=ingested, rejected=rejected)

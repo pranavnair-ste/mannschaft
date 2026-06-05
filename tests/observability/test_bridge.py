@@ -1,6 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from pi_harness.trajectory.schema import TrajectoryEvent
+from pi_harness.trajectory import runs as runs_mod
+from pi_harness.trajectory import store as store_mod
 from pi_harness.observability import bridge
 
 CTX = bridge.RunContext(run_id="run-x", team_name="team-a", topology="pipeline")
@@ -87,12 +89,134 @@ def test_envelopes_for_run_separates_agents():
 def test_backfill_run_reads_store_and_posts(monkeypatch):
     posted = []
     monkeypatch.setattr(bridge, "post_events",
-                        lambda envs, url, token: posted.extend(envs) or {"ingested": len(envs)})
+                        lambda envs, url, token: posted.extend(envs) or {"ingested": len(envs), "rejected": []})
     monkeypatch.setattr(bridge, "_load_run_context",
                         lambda run_id, db_path=None: CTX)
     rows = [(1, _ev(agent_id="planner", classification="message", step_id="turn-1",
                     output={"text": "hi", "cost_usd": 0}))]
     monkeypatch.setattr(bridge, "_read_rows", lambda run_id, db_path=None: rows)
-    n = bridge.backfill_run("run-x", url="http://x", token="t")
-    assert n == 4  # session_start, turn_start, assistant_message, turn_end
+    result = bridge.backfill_run("run-x", url="http://x", token="t")
+    # session_start, turn_start, assistant_message, turn_end
+    assert result.sent == 4
+    assert result.ingested == 4  # tallied from the fork's response, not len(envs)
+    assert result.rejected == 0
     assert posted[0]["type"] == "session_start"
+
+
+def test_backfill_run_counts_fork_rejections(monkeypatch):
+    """A re-run ships the same deterministic ids; the fork dedupes them, so the
+    result must report sent>0 with ingested==0 (the gap the live smoke exposed)."""
+    monkeypatch.setattr(bridge, "post_events",
+                        lambda envs, url, token: {"ingested": 0, "rejected": [e["event_id"] for e in envs]})
+    monkeypatch.setattr(bridge, "_load_run_context", lambda run_id, db_path=None: CTX)
+    rows = [(1, _ev(agent_id="planner", classification="message", step_id="turn-1",
+                    output={"text": "hi", "cost_usd": 0}))]
+    monkeypatch.setattr(bridge, "_read_rows", lambda run_id, db_path=None: rows)
+    result = bridge.backfill_run("run-x", url="http://x", token="t")
+    assert result.sent == 4
+    assert result.ingested == 0
+    assert result.rejected == 4
+
+
+def test_translate_custom_event():
+    """task_transition / guide_fired / sensor_fired -> a single 'custom' envelope
+    carrying custom_type + the raw input/output (spec §6)."""
+    ev = _ev(classification="task_transition", step_id="task-1",
+             input={"task": "X"}, output={"status": "done"})
+    env = bridge.translate(ev, CTX, seq=2)
+    assert env["type"] == "custom"
+    assert env["payload"]["custom_type"] == "task_transition"
+    assert env["payload"]["data"] == {"input": {"task": "X"}, "output": {"status": "done"}}
+
+
+def test_translate_tool_result_falls_back_to_json_when_no_content():
+    """When a tool_result output carries no content[] list, content_text falls
+    back to the JSON blob so the envelope is still informative."""
+    ev = _ev(classification="tool_result", tool="bash", step_id="c1",
+             output={"exitCode": 0, "stdout": "ok"})
+    env = bridge.translate(ev, CTX, seq=1)
+    assert env["payload"]["content_text"] == '{"exitCode": 0, "stdout": "ok"}'
+    assert env["payload"]["is_error"] is False
+
+
+def test_translate_tolerates_malformed_output_without_raising():
+    """audit #29 on the bridge side: output is JSON-decoded from SQLite and may be
+    any shape — a corrupted row must yield a valid envelope, never raise."""
+    # message with non-str text / non-int tokens / non-dict output all coerce safely
+    ev = _ev(classification="message", step_id="turn-1", tokens_in="oops", tokens_out=None,
+             output={"text": 123, "thinking": None, "cost_usd": "lots", "stopReason": 7})
+    env = bridge.translate(ev, CTX, seq=0)
+    assert env["payload"]["text"] == ""        # non-str text dropped
+    assert env["payload"]["thinking"] == ""
+    assert env["payload"]["stop_reason"] == "stop"  # non-str stopReason -> default
+    assert env["payload"]["usage"]["input"] == 0    # non-int tokens coerced
+    assert env["payload"]["usage"]["cost_total"] == 0.0
+    # tool_result with output that isn't even a dict must not raise
+    ev2 = _ev(classification="tool_result", tool="bash", step_id="c1", output={})
+    ev2.output = "a corrupted string blob"  # bypass dataclass typing, as SQLite JSON could
+    env2 = bridge.translate(ev2, CTX, seq=1)
+    assert isinstance(env2["payload"]["content_text"], str)
+
+
+def test_envelopes_for_run_is_idempotent():
+    """Re-running the same rows yields byte-identical envelopes (deterministic
+    event_ids + seq) so re-tails dedupe against the fork (spec §11)."""
+    rows = [
+        (1, _ev(agent_id="planner", classification="tool_call", tool="bash", step_id="c1")),
+        (2, _ev(agent_id="planner", classification="message", step_id="turn-1",
+                output={"text": "done", "cost_usd": 0})),
+    ]
+    a = bridge.envelopes_for_run(rows, CTX)
+    b = bridge.envelopes_for_run(rows, CTX)
+    assert [e["event_id"] for e in a] == [e["event_id"] for e in b]
+    assert a == b  # fully identical, not just ids
+
+
+def test_iso_preserves_non_utc_offset():
+    """_iso() rewrites only the UTC '+00:00' to 'Z'; other offsets stay intact so
+    swimlane wall-clock spacing is faithful (guards against a normalize-to-UTC regression)."""
+    assert bridge._iso(datetime(2026, 6, 5, 12, 0, tzinfo=timezone.utc)) == "2026-06-05T12:00:00.000Z"
+    tz_530 = timezone(timedelta(hours=5, minutes=30))
+    assert bridge._iso(datetime(2026, 6, 5, 12, 0, tzinfo=tz_530)) == "2026-06-05T12:00:00.000+05:30"
+
+
+def test_backfill_run_real_store_contract(tmp_path, monkeypatch):
+    """Spec §11 e2e: exercise the REAL store/runs read path (not monkeypatched)
+    against a throwaway SQLite DB — catches drift in query_events_after / get_run
+    signatures that the unit tests' mocks would hide. No ClawTeam, no live fork."""
+    db = tmp_path / "trajectory.db"
+    store_mod.init_db(db)
+    runs_mod.register_run(
+        run_id="run-x", spec_id=None, topology="pipeline", sync_mode=None,
+        session_id=None, goal=None, team_name="team-a",
+        started_at=TS, run_spec_json="{}", db_path=db,
+    )
+    store_mod.write_event(
+        _ev(agent_id="planner", classification="tool_call", tool="bash", step_id="c1",
+            input={"command": "ls"}), db_path=db)
+    store_mod.write_event(
+        _ev(agent_id="planner", classification="message", step_id="turn-1",
+            output={"text": "done", "cost_usd": 0.01}), db_path=db)
+
+    captured = []
+    monkeypatch.setattr(bridge, "post_events",
+                        lambda envs, url, token: captured.extend(envs) or {"ingested": len(envs), "rejected": []})
+
+    result = bridge.backfill_run("run-x", url="http://x", token="t", db_path=db)
+    # session_start, turn_start, tool_call, turn_end? -> tool_call doesn't close a turn;
+    # then turn_start(reused)/message/turn_end. Order: session_start, turn_start,
+    # tool_call, assistant_message, turn_end == 5 envelopes for one agent.
+    types = [e["type"] for e in captured]
+    assert types == ["session_start", "turn_start", "tool_call", "assistant_message", "turn_end"]
+    assert result.sent == 5 and result.ingested == 5
+    # RunContext was loaded from the REAL runs table:
+    assert captured[0]["pool"] == "run-x"
+    assert captured[0]["tags"] == ["team-a", "pipeline"]
+
+    # Idempotency against the real path: re-run yields identical event_ids.
+    again = []
+    monkeypatch.setattr(bridge, "post_events",
+                        lambda envs, url, token: again.extend(envs) or {"ingested": 0, "rejected": [e["event_id"] for e in envs]})
+    result2 = bridge.backfill_run("run-x", url="http://x", token="t", db_path=db)
+    assert [e["event_id"] for e in again] == [e["event_id"] for e in captured]
+    assert result2.sent == 5 and result2.ingested == 0 and result2.rejected == 5
