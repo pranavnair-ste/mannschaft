@@ -74,6 +74,34 @@ def test_envelopes_for_run_synthesizes_session_and_turns():
     assert all(e["session_id"] == "run-x:planner" for e in envs)
 
 
+def test_envelopes_for_run_emits_thinking_event_before_message():
+    """When a turn carries reasoning, emit a native fork `thinking` event (which
+    the fork already renders) just before the assistant_message, so reasoning is
+    visible and ordered before the answer."""
+    rows = [
+        (1, _ev(agent_id="planner", classification="message", step_id="turn-1",
+                output={"text": "answer", "thinking": "let me reason", "cost_usd": 0})),
+    ]
+    envs = bridge.envelopes_for_run(rows, CTX)
+    types = [e["type"] for e in envs]
+    assert types == ["session_start", "turn_start", "thinking", "assistant_message", "turn_end"]
+    think = next(e for e in envs if e["type"] == "thinking")
+    assert think["payload"]["text"] == "let me reason"
+    assert think["session_id"] == "run-x:planner"
+    assert [e["seq"] for e in envs] == [0, 1, 2, 3, 4]
+
+
+def test_envelopes_for_run_no_thinking_event_when_empty():
+    """Empty/encrypted thinking (the gpt-5.4-mini default) emits no thinking event."""
+    rows = [
+        (1, _ev(agent_id="planner", classification="message", step_id="turn-1",
+                output={"text": "answer", "thinking": "", "cost_usd": 0})),
+    ]
+    types = [e["type"] for e in bridge.envelopes_for_run(rows, CTX)]
+    assert "thinking" not in types
+    assert types == ["session_start", "turn_start", "assistant_message", "turn_end"]
+
+
 def test_envelopes_for_run_separates_agents():
     rows = [
         (1, _ev(agent_id="a1", classification="message", step_id="turn-1", output={"text": "x", "cost_usd": 0})),

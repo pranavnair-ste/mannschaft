@@ -175,6 +175,14 @@ def _custom_data(classification: str, inp: dict, out: dict) -> dict:
     return {"input": inp, "output": out}
 
 
+def _thinking_envelope(ev: TrajectoryEvent, ctx: RunContext, seq: int, row_id: int, thinking: str) -> dict:
+    """A native fork `thinking` event for a turn's reasoning. The fork already
+    renders this type; emitting it (vs. a sidecar field on assistant_message)
+    reuses that renderer and orders reasoning before the answer."""
+    eid = _eid(ctx, ev.agent_id, "thinking", row_id, ev.step_id)
+    return _base(ev, ctx, "thinking", seq, eid, {"text": _truncate(thinking)})
+
+
 def _synth(ctx: RunContext, agent_id: str, ts, etype: str, seq: int, kind: str, payload: dict) -> dict:
     eid = str(uuid.uuid5(_NS, ":".join((ctx.run_id, agent_id, kind))))
     fake = TrajectoryEvent(run_id=ctx.run_id, agent_id=agent_id, step_id="", ts=ts,
@@ -211,6 +219,10 @@ def envelopes_for_run(rows: list[tuple[int, TrajectoryEvent]], ctx: RunContext) 
             out.append(_synth(ctx, ev.agent_id, ev.ts, "turn_start", nxt(sid),
                               f"turn:{turn_idx[sid]}:start", {"turn_index": turn_idx[sid]}))
             turn_open[sid] = True
+        if ev.classification == "message":
+            thinking = ev.output.get("thinking") if isinstance(ev.output, dict) else None
+            if isinstance(thinking, str) and thinking.strip():
+                out.append(_thinking_envelope(ev, ctx, nxt(sid), row_id, thinking))
         out.append(translate(ev, ctx, seq=nxt(sid), row_id=row_id))
         if ev.classification == "message":
             out.append(_synth(ctx, ev.agent_id, ev.ts, "turn_end", nxt(sid),
