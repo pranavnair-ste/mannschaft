@@ -25,6 +25,11 @@ DEFAULT_FAST_MODEL = "gpt-5-mini"
 DEFAULT_CLAWTEAM_STATE_DIR = "~/.clawteam"
 DEFAULT_CORPUS_ROOT = "~/.pi-harness/corpus"
 DEFAULT_TRAJECTORY_DB_PATH = "~/.pi-harness/trajectory.db"
+DEFAULT_OBS_FORK_DIR = "~/Desktop/Personal/pi-agent-observability"
+
+
+def _bool_env(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -40,6 +45,11 @@ class Config:
             its contents.
         corpus_root: Root directory for the expertise corpus (Plan 3 owns it).
         trajectory_db_path: SQLite file path for the trajectory store (Plan 2).
+        obs_enabled: Whether the observability layer is enabled.
+        obs_host: Host the fork observability server binds to.
+        obs_port: Port the fork observability server binds to.
+        obs_auth_token: Bearer token for the fork observability server (secret).
+        obs_fork_dir: Directory of the pi-agent observability fork checkout.
     """
 
     openai_api_key: str = field(repr=False)  # never echo the secret in reprs/tracebacks/logs
@@ -48,6 +58,16 @@ class Config:
     clawteam_state_dir: Path
     corpus_root: Path
     trajectory_db_path: Path
+    obs_enabled: bool
+    obs_host: str
+    obs_port: int
+    obs_auth_token: str = field(repr=False)  # never echo the secret in reprs/tracebacks/logs
+    obs_fork_dir: Path
+
+    @property
+    def obs_server_url(self) -> str:
+        override = os.environ.get("OBS_SERVER_URL", "").strip()
+        return override if override else f"http://{self.obs_host}:{self.obs_port}"
 
 
 def _expand(path_str: str) -> Path:
@@ -78,6 +98,23 @@ def load_config(env_file: Optional[str | Path] = ".env") -> Config:
             "OPENAI_API_KEY is required. Set it in the environment or in a .env file."
         )
 
+    obs_enabled = _bool_env(os.environ.get("PI_HARNESS_OBS_ENABLED", ""))
+    obs_host = os.environ.get("OBS_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port_raw = os.environ.get("OBS_PORT", "43190").strip()
+    try:
+        obs_port = int(port_raw)
+    except ValueError as exc:
+        raise ConfigError(f"OBS_PORT must be an integer, got {port_raw!r}") from exc
+    if not (1 <= obs_port <= 65535):
+        raise ConfigError(f"OBS_PORT out of range 1-65535: {obs_port}")
+    obs_auth_token = os.environ.get("OBS_AUTH_TOKEN", "").strip()
+    if obs_enabled and not obs_auth_token:
+        raise ConfigError(
+            "OBS_AUTH_TOKEN required when observability is enabled "
+            "(PI_HARNESS_OBS_ENABLED is set)"
+        )
+    obs_fork_dir = _expand(os.environ.get("PI_HARNESS_OBS_FORK_DIR", DEFAULT_OBS_FORK_DIR))
+
     return Config(
         openai_api_key=api_key,
         reasoning_model=os.environ.get(
@@ -95,4 +132,9 @@ def load_config(env_file: Optional[str | Path] = ".env") -> Config:
         trajectory_db_path=_expand(
             os.environ.get("PI_HARNESS_TRAJECTORY_DB_PATH", DEFAULT_TRAJECTORY_DB_PATH)
         ),
+        obs_enabled=obs_enabled,
+        obs_host=obs_host,
+        obs_port=obs_port,
+        obs_auth_token=obs_auth_token,
+        obs_fork_dir=obs_fork_dir,
     )

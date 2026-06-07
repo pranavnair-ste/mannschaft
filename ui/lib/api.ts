@@ -74,4 +74,10 @@ export const api = {
     json<{ models: string[]; error?: string }>(
       `/settings/models/local-models?base_url=${encodeURIComponent(baseUrl)}`,
     ),
+  // Runtime-resolved deep-link into the fork observability UI (token/port live
+  // on the backend Config, not build-time NEXT_PUBLIC_* env).
+  obsLink: (runId: string) =>
+    json<{ enabled: boolean; base: string; url: string }>(
+      `/observability/link?run_id=${encodeURIComponent(runId)}`,
+    ),
 };

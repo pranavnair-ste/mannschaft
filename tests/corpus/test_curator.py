@@ -23,6 +23,11 @@ def _make_config(corpus_root: Path):
         clawteam_state_dir=corpus_root.parent / "clawteam",
         corpus_root=corpus_root,
         trajectory_db_path=corpus_root.parent / "trajectory.db",
+        obs_enabled=False,
+        obs_host="127.0.0.1",
+        obs_port=43190,
+        obs_auth_token="",
+        obs_fork_dir=corpus_root.parent / "obs-fork",
     )
 
 

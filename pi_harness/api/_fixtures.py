@@ -105,6 +105,8 @@ def main() -> None:
         openai_api_key="test", reasoning_model="gpt-5", fast_model="gpt-5-mini",
         clawteam_state_dir=tmp / "clawteam", corpus_root=corpus,
         trajectory_db_path=tmp / "traj.db",
+        obs_enabled=False, obs_host="127.0.0.1", obs_port=43190,
+        obs_auth_token="", obs_fork_dir=tmp / "obs-fork",
     )
     _seed(config)
     app = create_app(config, DashboardConfig())

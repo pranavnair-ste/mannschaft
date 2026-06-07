@@ -109,3 +109,57 @@ def test_config_is_frozen(monkeypatch):
 
     with pytest.raises(Exception):
         cfg.openai_api_key = "sk-other"  # type: ignore[misc]
+
+
+def test_obs_defaults_disabled(monkeypatch):
+    from pi_harness.config import load_config
+
+    for k in ("PI_HARNESS_OBS_ENABLED", "OBS_HOST", "OBS_PORT", "OBS_AUTH_TOKEN",
+              "PI_HARNESS_OBS_FORK_DIR", "OBS_SERVER_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    cfg = load_config(env_file=None)
+    assert cfg.obs_enabled is False
+    assert cfg.obs_host == "127.0.0.1"
+    assert cfg.obs_port == 43190
+    assert cfg.obs_auth_token == ""
+    assert cfg.obs_server_url == "http://127.0.0.1:43190"
+
+
+def test_obs_server_url_composed_and_overridable(monkeypatch):
+    from pi_harness.config import load_config
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("OBS_SERVER_URL", raising=False)
+    monkeypatch.setenv("OBS_HOST", "127.0.0.1")
+    monkeypatch.setenv("OBS_PORT", "5000")
+    assert load_config(env_file=None).obs_server_url == "http://127.0.0.1:5000"
+    monkeypatch.setenv("OBS_SERVER_URL", "http://example:9/")
+    assert load_config(env_file=None).obs_server_url == "http://example:9/"
+
+
+def test_obs_enabled_requires_token(monkeypatch):
+    from pi_harness.config import load_config, ConfigError
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("PI_HARNESS_OBS_ENABLED", "1")
+    monkeypatch.delenv("OBS_AUTH_TOKEN", raising=False)
+    with pytest.raises(ConfigError, match="OBS_AUTH_TOKEN"):
+        load_config(env_file=None)
+
+
+def test_obs_token_not_in_repr(monkeypatch):
+    from pi_harness.config import load_config
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("OBS_AUTH_TOKEN", "super-secret-xyz")
+    assert "super-secret-xyz" not in repr(load_config(env_file=None))
+
+
+def test_obs_port_invalid_raises(monkeypatch):
+    from pi_harness.config import load_config, ConfigError
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("OBS_PORT", "not-a-port")
+    with pytest.raises(ConfigError, match="OBS_PORT"):
+        load_config(env_file=None)

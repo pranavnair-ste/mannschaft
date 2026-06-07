@@ -5,7 +5,11 @@ against the fork's event_id PK + UNIQUE(session_id, seq)."""
 from __future__ import annotations
 
 import json
+import logging
 import os
+import socket
+import time
+import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass
@@ -15,12 +19,16 @@ from pi_harness.trajectory import runs as runs_mod
 from pi_harness.trajectory import store as store_mod
 from pi_harness.trajectory.schema import TrajectoryEvent
 
+log = logging.getLogger(__name__)
+
 # Fixed namespace so event_ids are stable across processes/restarts.
 _NS = uuid.UUID("6f0d8a4e-0c2b-4e8a-9b1a-7c2d3e4f5a6b")
 MAX_TEXT = 32_000  # fork MAX_TEXT_FIELD / MAX_RESULT_BYTES
 
 DEFAULT_URL = os.environ.get("OBS_SERVER_URL", "http://127.0.0.1:43190")
-DEFAULT_TOKEN = os.environ.get("OBS_AUTH_TOKEN", "devtoken")
+DEFAULT_TOKEN = os.environ.get("OBS_AUTH_TOKEN", "")
+
+_RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
 
 
 @dataclass(frozen=True)
@@ -249,16 +257,58 @@ class BackfillResult:
     rejected: int
 
 
-def post_events(envelopes: list[dict], url: str, token: str) -> dict:
+def post_events(envelopes: list[dict], url: str, token: str, *, timeout: float = 15.0) -> dict:
     """POST a batch to the fork's /events; return its {"ingested", "rejected"}.
     Raises urllib.error.URLError/HTTPError on transport failure or non-2xx — a
     backfill against an unreachable fork must fail loudly, not silently."""
     req = urllib.request.Request(
         f"{url}/events", data=json.dumps(envelopes).encode(), method="POST",
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         body = json.load(resp)
     return body if isinstance(body, dict) else {}
+
+
+def _is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in _RETRYABLE_STATUS
+    if isinstance(exc, urllib.error.URLError):  # conn refused / DNS / reset (HTTPError handled above)
+        return True
+    if isinstance(exc, (socket.timeout, TimeoutError)):
+        return True
+    return False
+
+
+def _retry_after_seconds(exc: urllib.error.HTTPError) -> float | None:
+    try:
+        val = exc.headers.get("Retry-After") if exc.headers else None
+        return float(int(val)) if val and val.strip().isdigit() else None
+    except Exception:
+        return None
+
+
+def post_events_with_retry(envelopes: list[dict], url: str, token: str, *,
+                           timeout: float = 15.0, max_attempts: int = 4,
+                           base_delay: float = 0.5, factor: float = 2.0,
+                           max_delay: float = 30.0, sleep=time.sleep) -> dict:
+    """POST with exponential backoff on retryable transport errors. Permanent
+    failures (4xx other than 408/429) re-raise immediately; transient ones
+    (conn refused / timeout / 5xx / 429) retry up to max_attempts, honoring a
+    parseable integer Retry-After header on 429."""
+    attempt = 0
+    while True:
+        try:
+            return post_events(envelopes, url, token, timeout=timeout)
+        except Exception as exc:
+            attempt += 1
+            if attempt >= max_attempts or not _is_retryable(exc):
+                raise
+            delay = min(max_delay, base_delay * (factor ** (attempt - 1)))
+            if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
+                ra = _retry_after_seconds(exc)
+                if ra is not None:
+                    delay = min(max_delay, ra)
+            sleep(delay)
 
 
 def _read_rows(run_id: str, db_path=None) -> list[tuple[int, TrajectoryEvent]]:
@@ -281,8 +331,68 @@ def backfill_run(run_id: str, *, url: str = DEFAULT_URL, token: str = DEFAULT_TO
     ingested = 0
     rejected = 0
     for i in range(0, len(envs), 50):
-        resp = post_events(envs[i:i + 50], url, token)
+        resp = post_events_with_retry(envs[i:i + 50], url, token)
         ingested += _as_int(resp.get("ingested", 0))
         rej = resp.get("rejected")
         rejected += len(rej) if isinstance(rej, list) else 0
     return BackfillResult(sent=len(envs), ingested=ingested, rejected=rejected)
+
+
+_TERMINAL = {"succeeded", "failed", "cancelled"}
+
+
+def tail_once(run_id: str, last_count: int, *, url: str, token: str, db_path=None) -> int:
+    """Re-translate the WHOLE run and POST only the new envelope tail.
+
+    ``envelopes_for_run`` is deterministic and append-only as rows grow: the
+    seq/event_id of any already-emitted envelope never changes when new rows
+    arrive. So we re-translate everything each tick and ship only
+    ``envs[last_count:]`` (in batches of 50). Translating a new-rows-only slice
+    would reset seq to 0 and mint different event_ids -> UNIQUE(session_id, seq)
+    collisions. Returns the new total envelope count; a no-op when nothing new."""
+    ctx = _load_run_context(run_id, db_path=db_path)
+    rows = _read_rows(run_id, db_path=db_path)
+    envs = envelopes_for_run(rows, ctx)
+    new = envs[last_count:]
+    for i in range(0, len(new), 50):
+        post_events_with_retry(new[i:i + 50], url, token)
+    return len(envs)
+
+
+def follow_runs(*, url: str, token: str, db_path=None, poll_interval: float = 1.0,
+                sleep=time.sleep, stop=None, max_polls=None) -> None:
+    """Live-tail every run in the registry, shipping new envelopes each tick.
+
+    Each poll enumerates ``query_run_summaries`` and ``tail_once``s every
+    not-yet-``done`` run. A run is marked ``done`` once it reaches a terminal
+    status AND a subsequent poll added nothing new (so the final tail always
+    drains). Stops when ``stop()`` is truthy, after ``max_polls`` polls, or never
+    (daemon). ``sleep(poll_interval)`` runs at the loop bottom (0.0 = no-op)."""
+    counts: dict[str, int] = {}
+    done: set[str] = set()
+    polls = 0
+    while True:
+        for summary in runs_mod.query_run_summaries(db_path=db_path):
+            rid = summary.run_id
+            if rid in done:
+                continue
+            before = counts.get(rid, 0)
+            try:
+                counts[rid] = tail_once(rid, before, url=url, token=token, db_path=db_path)
+            except Exception as exc:
+                # One unreachable/erroring run (e.g. the fork not yet up at launch,
+                # or a transient outage that outlasts post_events' retry budget) must
+                # NOT kill the whole daemon — it would take the supervised stack down
+                # with it. Log and retry on the next poll; `counts[rid]` is unchanged,
+                # so the same tail re-ships (idempotent via deterministic event_ids).
+                log.warning("bridge: tailing run %s failed, will retry next poll: %s", rid, exc)
+                continue
+            status = (runs_mod.get_run(rid, db_path=db_path) or {}).get("status")
+            if status in _TERMINAL and counts[rid] == before:
+                done.add(rid)
+        polls += 1
+        if stop is not None and stop():
+            return
+        if max_polls is not None and polls >= max_polls:
+            return
+        sleep(poll_interval)
