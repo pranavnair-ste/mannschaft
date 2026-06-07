@@ -71,11 +71,13 @@ def create_app(config: Config, dash: DashboardConfig | None = None) -> FastAPI:
 
     from pi_harness.api.routes.corpus import router as corpus_router
     from pi_harness.api.routes.guards import router as guards_router
+    from pi_harness.api.routes.observability import router as observability_router
     from pi_harness.api.routes.settings import router as settings_router
     from pi_harness.api.routes.ws import router as ws_router
 
     app.include_router(corpus_router)
     app.include_router(guards_router)
+    app.include_router(observability_router)
     app.include_router(settings_router)
     app.include_router(ws_router)
     return app

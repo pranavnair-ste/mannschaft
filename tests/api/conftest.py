@@ -29,6 +29,11 @@ def cfg(tmp_path: Path):
         clawteam_state_dir=tmp_path / "clawteam",
         corpus_root=corpus,
         trajectory_db_path=tmp_path / "traj.db",
+        obs_enabled=False,
+        obs_host="127.0.0.1",
+        obs_port=43190,
+        obs_auth_token="",
+        obs_fork_dir=tmp_path / "obs-fork",
     )
 
 

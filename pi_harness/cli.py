@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -198,10 +199,11 @@ def stop(
 
 @app.command()
 def observe(
-    run: str = typer.Option(..., "--run", help="run_id to backfill/replay into the observability fork."),
+    run: Optional[str] = typer.Option(None, "--run", help="run_id to backfill/replay into the observability fork (required unless --follow)."),
     url: Optional[str] = typer.Option(None, "--url", help="Fork base URL (default OBS_SERVER_URL or http://127.0.0.1:43190)."),
-    token: Optional[str] = typer.Option(None, "--token", help="Bearer token (default OBS_AUTH_TOKEN or devtoken)."),
+    token: Optional[str] = typer.Option(None, "--token", help="Bearer token (default OBS_AUTH_TOKEN)."),
     db: Optional[Path] = typer.Option(None, "--db", help="Trajectory DB to read (default: configured trajectory_db_path)."),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Stream events live to the fork until runs finish (Ctrl-C to stop)."),
 ) -> None:
     """Translate a run's trajectory rows and POST them to the pi-observability fork."""
     import urllib.error
@@ -209,10 +211,22 @@ def observe(
     from pi_harness.config import load_config
     from pi_harness.observability import bridge
 
-    db_path = db or load_config().trajectory_db_path
-    target = url or bridge.DEFAULT_URL
+    cfg = load_config()
+    db_path = db or cfg.trajectory_db_path
+    target = url or cfg.obs_server_url
+    auth = token or cfg.obs_auth_token
+
+    if follow:
+        typer.echo(f"following all runs -> {target} (Ctrl-C to stop)")
+        bridge.follow_runs(url=target, token=auth, db_path=db_path)
+        return
+
+    if not run:
+        typer.echo("error: --run is required unless --follow is given", err=True)
+        raise typer.Exit(code=1)
+
     try:
-        result = bridge.backfill_run(run, url=target, token=token or bridge.DEFAULT_TOKEN, db_path=db_path)
+        result = bridge.backfill_run(run, url=target, token=auth, db_path=db_path)
     except urllib.error.URLError as exc:
         typer.echo(f"error: could not reach observability fork at {target}: {exc}", err=True)
         raise typer.Exit(code=1)
@@ -220,6 +234,157 @@ def observe(
         f"bridged {result.sent} events for {run} "
         f"({result.ingested} ingested, {result.rejected} already present)"
     )
+
+
+# --------------------------------------------------------------------------- #
+# up / doctor — the one-command observability launcher + preflight
+# --------------------------------------------------------------------------- #
+
+
+def _fork_server_entry(fork_dir: Path) -> list[str]:
+    """Resolve the Bun argv that boots the fork's observability server.
+
+    The fork has no root ``package.json`` start script; its justfile runs
+    ``cd apps/observability && bun server.ts``, so the entry relative to the
+    fork root is ``apps/observability/server.ts``. We run it explicitly via
+    ``bun run <entry>`` from the fork root (the documented default).
+    """
+    return ["bun", "run", "apps/observability/server.ts"]
+
+
+@app.command()
+def up(
+    no_ui: bool = typer.Option(
+        False, "--no-ui", help="Skip the Next.js dashboard UI process."
+    ),
+    ready_timeout: float = typer.Option(
+        30.0, "--ready-timeout", help="Seconds to wait for health checks before tailing."
+    ),
+) -> None:
+    """Boot the full observability stack: the fork's Bun server, the live bridge
+    tailer, the FastAPI dashboard, and (unless --no-ui) the Next.js UI.
+
+    Blocks until a child exits or Ctrl-C. All children are torn down on exit.
+    """
+    from urllib.parse import quote
+
+    from pi_harness.config import load_config
+    from pi_harness.observability.supervisor import Proc, Supervisor
+
+    cfg = load_config()
+
+    fork_env = {
+        **os.environ,
+        "OBS_AUTH_TOKEN": cfg.obs_auth_token,
+        "OBS_PORT": str(cfg.obs_port),
+        "OBS_HOST": cfg.obs_host,
+        "OBS_DEV": "1" if not cfg.obs_auth_token else "",
+    }
+    procs = [
+        Proc(
+            "fork",
+            _fork_server_entry(cfg.obs_fork_dir),
+            cwd=cfg.obs_fork_dir,
+            env=fork_env,
+            health_url=f"{cfg.obs_server_url}/health",
+        ),
+        Proc(
+            "bridge",
+            [sys.executable, "-m", "pi_harness.cli", "observe", "--follow"],
+            env=dict(os.environ),
+        ),
+        Proc(
+            "api",
+            [sys.executable, "-m", "pi_harness.api.server"],
+            env=dict(os.environ),
+            health_url="http://127.0.0.1:8800/healthz",
+        ),
+    ]
+    if not no_ui:
+        procs.append(
+            Proc(
+                "ui",
+                ["npm", "run", "dev"],
+                cwd=Path("ui"),
+                env=dict(os.environ),
+                health_url="http://127.0.0.1:3000",
+            )
+        )
+
+    base = cfg.obs_server_url.rstrip("/")
+    frag = "#view=race&pool=<run_id>&hide_after=never&show_hidden=1"
+    link = (
+        f"{base}/?token={quote(cfg.obs_auth_token)}{frag}"
+        if cfg.obs_auth_token
+        else f"{base}/{frag}"
+    )
+    typer.echo(f"observability fork UI: {base}/")
+    typer.echo(f"run deep-link template: {link}")
+    typer.echo("starting processes: " + ", ".join(p.name for p in procs))
+
+    raise typer.Exit(Supervisor(procs).run(ready_timeout=ready_timeout))
+
+
+@app.command()
+def doctor() -> None:
+    """Preflight the observability stack: bun, the fork checkout, npm, the UI
+    deps, free ports, and the auth token. Exits non-zero if a hard check fails."""
+    import shutil
+    import socket
+    from urllib.parse import quote
+
+    from pi_harness.config import load_config
+
+    cfg = load_config()
+    ok = True
+
+    def check(label: str, passed: bool, *, hard: bool = True) -> None:
+        nonlocal ok
+        mark = "✓" if passed else "✗"
+        typer.echo(f"  {mark} {label}")
+        if not passed and hard:
+            ok = False
+
+    def port_free(port: int) -> bool:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+        finally:
+            s.close()
+
+    typer.echo("observability preflight:")
+
+    check("bun on PATH", shutil.which("bun") is not None)
+    entry = cfg.obs_fork_dir / "apps" / "observability" / "server.ts"
+    check(f"fork checkout at {cfg.obs_fork_dir}", cfg.obs_fork_dir.exists())
+    check(f"fork server entry {entry}", entry.exists())
+
+    check("npm on PATH", shutil.which("npm") is not None)
+    check("ui/node_modules present", (Path("ui") / "node_modules").exists())
+
+    check(f"port 8800 free (api)", port_free(8800))
+    check(f"port 3000 free (ui)", port_free(3000))
+    check(f"port {cfg.obs_port} free (fork)", port_free(cfg.obs_port))
+
+    check(
+        "OBS_AUTH_TOKEN set (required when obs enabled)",
+        (not cfg.obs_enabled) or bool(cfg.obs_auth_token),
+    )
+
+    base = cfg.obs_server_url.rstrip("/")
+    frag = "#view=race&pool=<run_id>&hide_after=never&show_hidden=1"
+    link = (
+        f"{base}/?token={quote(cfg.obs_auth_token)}{frag}"
+        if cfg.obs_auth_token
+        else f"{base}/{frag}"
+    )
+    typer.echo(f"  deep-link template: {link}")
+
+    if not ok:
+        raise typer.Exit(1)
 
 
 # --------------------------------------------------------------------------- #

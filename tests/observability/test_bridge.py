@@ -138,7 +138,7 @@ def test_envelopes_for_run_separates_agents():
 def test_backfill_run_reads_store_and_posts(monkeypatch):
     posted = []
     monkeypatch.setattr(bridge, "post_events",
-                        lambda envs, url, token: posted.extend(envs) or {"ingested": len(envs), "rejected": []})
+                        lambda envs, url, token, *, timeout=15.0: posted.extend(envs) or {"ingested": len(envs), "rejected": []})
     monkeypatch.setattr(bridge, "_load_run_context",
                         lambda run_id, db_path=None: CTX)
     rows = [(1, _ev(agent_id="planner", classification="message", step_id="turn-1",
@@ -156,7 +156,7 @@ def test_backfill_run_counts_fork_rejections(monkeypatch):
     """A re-run ships the same deterministic ids; the fork dedupes them, so the
     result must report sent>0 with ingested==0 (the gap the live smoke exposed)."""
     monkeypatch.setattr(bridge, "post_events",
-                        lambda envs, url, token: {"ingested": 0, "rejected": [e["event_id"] for e in envs]})
+                        lambda envs, url, token, *, timeout=15.0: {"ingested": 0, "rejected": [e["event_id"] for e in envs]})
     monkeypatch.setattr(bridge, "_load_run_context", lambda run_id, db_path=None: CTX)
     rows = [(1, _ev(agent_id="planner", classification="message", step_id="turn-1",
                     output={"text": "hi", "cost_usd": 0}))]
@@ -277,7 +277,7 @@ def test_backfill_run_real_store_contract(tmp_path, monkeypatch):
 
     captured = []
     monkeypatch.setattr(bridge, "post_events",
-                        lambda envs, url, token: captured.extend(envs) or {"ingested": len(envs), "rejected": []})
+                        lambda envs, url, token, *, timeout=15.0: captured.extend(envs) or {"ingested": len(envs), "rejected": []})
 
     result = bridge.backfill_run("run-x", url="http://x", token="t", db_path=db)
     # session_start, turn_start, tool_call, turn_end? -> tool_call doesn't close a turn;
@@ -293,7 +293,7 @@ def test_backfill_run_real_store_contract(tmp_path, monkeypatch):
     # Idempotency against the real path: re-run yields identical event_ids.
     again = []
     monkeypatch.setattr(bridge, "post_events",
-                        lambda envs, url, token: again.extend(envs) or {"ingested": 0, "rejected": [e["event_id"] for e in envs]})
+                        lambda envs, url, token, *, timeout=15.0: again.extend(envs) or {"ingested": 0, "rejected": [e["event_id"] for e in envs]})
     result2 = bridge.backfill_run("run-x", url="http://x", token="t", db_path=db)
     assert [e["event_id"] for e in again] == [e["event_id"] for e in captured]
     assert result2.sent == 5 and result2.ingested == 0 and result2.rejected == 5
