@@ -136,13 +136,19 @@ def test_consume_stream_logs_dropped_write_errors(tmp_path: Path, monkeypatch, c
     assert any("dropped" in r.getMessage().lower() for r in caplog.records)
 
 
-def test_build_argv_pi_guards_prompt_starting_with_dash():
-    """A prompt that looks like a flag must be shielded by an end-of-options
-    `--` so pi treats it as the positional prompt, not a flag (#27)."""
-    argv = _build_argv("pi", ["--help me"])
-    assert "--" in argv
-    assert argv.index("--") < argv.index("--help me")
-    assert argv[-1] == "--help me"
+def test_build_argv_pi_does_not_inject_unsupported_end_of_options():
+    """pi 0.73.1 has no `--` end-of-options separator — injecting one crashes it
+    with `Unknown option: --` (verified 2026-06-06). So _build_argv must NOT add
+    a `--`; the prompt is passed positionally, preserving @file/multi-message
+    semantics. (This replaces the audit #27 `--` guard, which never worked.)"""
+    argv = _build_argv("pi", ["a prompt"])
+    assert "--" not in argv
+    assert argv[-1] == "a prompt"
+
+    # Multiple positional messages (and @file includes) pass through verbatim.
+    argv = _build_argv("pi", ["@notes.md", "msg one", "msg two"])
+    assert "--" not in argv
+    assert argv[-3:] == ["@notes.md", "msg one", "msg two"]
 
 
 def test_run_kills_child_and_propagates_on_capture_error(tmp_path: Path, monkeypatch):

@@ -86,11 +86,16 @@ def _build_argv(
             argv.extend(["--provider", provider])
         if model is not None:
             argv.extend(["--model", model])
-        # End-of-options guard so a prompt that begins with '-' / '--' is treated
-        # as the positional prompt, not parsed as pi flags (audit #27).
-        if prompt_args:
-            argv.append("--")
-            argv.extend(prompt_args)
+        # pi 0.73.1 has NO end-of-options ("--") support: passing it crashes
+        # with `Error: Unknown option: --` (verified 2026-06-06). The prompt is
+        # appended as positional `[messages...]`, preserving pi's @file and
+        # multi-message semantics (`pi @file.md "msg1" "msg2"`).
+        # KNOWN LIMITATION (was audit #27): a prompt literally beginning with
+        # '-' is still parsed as a flag. pi offers no argv-level guard, and
+        # routing through stdin would collapse @file/multi-message into one blob
+        # — so we accept this edge (agent prompts don't start with '-'). The old
+        # `--` "guard" never worked; it just crashed pi on every non-empty prompt.
+        argv.extend(prompt_args)
         return argv
     if executor == "codex":
         # codex 0.134.0 CLI flags are not yet verified; pass through verbatim
