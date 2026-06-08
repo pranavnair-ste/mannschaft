@@ -103,6 +103,9 @@
 - `ui/app/layout.tsx`: mount `ModelQuickSwitcher` (or a settings-page "Quick Switch" card if header is heavy).
 - Verify via `ms up` against the running backend; record screenshots.
 
+## Status (2026-06-08)
+**Phase A COMPLETE & live-validated** — keystore, config-load, discovery+url_validation, routes (key/cloud-models/run-active/409), CLI (`ms models {set,key,list}` + `ms setup`). 655 tests green (+24 new). Live: `ms models list` discovered the local model from the running `:8080` server (air-gapped, no cloud call); `ms models set` succeeded when idle. Not pushed. **Phase B (GUI) pending** — manual-verify (no JS test harness).
+
 ## Self-review
 - Spec coverage: keystore ✅T1; key-to-launch ✅T2; discovery ✅T3; routes+409 ✅T4; CLI+setup ✅T5; GUI ✅PhaseB. Idle gate single-source ✅ (T4/T5 same `query_run_summaries`). Security (mask/chmod/no-leak) ✅ T1/T3/T4.
 - Gotchas honored: 2nd router (T4), `request` param (T4), preserve `.env` lines + re-chmod (T1), override order (T2), `validate_local_url` importable (T3), in-process CLI + `ensure_pi_provider` for local (T5), `orchestrator|builder` vocab (T5), smoke excluded.
