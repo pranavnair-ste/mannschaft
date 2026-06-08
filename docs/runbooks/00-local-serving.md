@@ -62,8 +62,15 @@ Confirm:
 
 > **Verify-on-first-run (plan T6 Step 3):** watch how pi's `--provider/--model/--base-url` and the registered ClawTeam profile interact with `agent_wrapper --bucket`. pi 0.73.1 has documented quirks (`stdin=DEVNULL`, no `--` end-of-options). If the profile model and the bucket resolution disagree, fix the normalizer in `agent_wrapper.py` / `clawteam_profile.py` and record what was observed below.
 
-## Observations (fill in after first live run)
+## Observations (first live run — 2026-06-08, dev box, Qwen3-Coder-30B-A3B-4bit)
 
-- Single-stream tok/s (dev model, small ctx): _____
-- Offline serve confirmed: _____
-- Live `ms launch` result + any pi/ClawTeam wiring adjustments: _____
+- **Single-stream tok/s:** ~73 tok/s (400 tokens / 5.48s end-to-end, small ctx) — **passes ≥30 bar with headroom.**
+- **`ms decompose` via local model, no key:** ✅ produced a valid 3-task JSON decomposition. Proves config-key-optional + settings-local-default + decomposer-local-client + local serving.
+- **Full `ms launch` (ClawTeam team), no key:** ✅ team launched on the local provider, isolated on `run/<id>`; **task 1 completed end-to-end**; trajectory store captured **384 events / 47,620 tok_in / 8,335 tok_out**; provider auto-registered (`harness-local`→`:8080`); team + run-worktree torn down cleanly (no leak).
+- **Wiring confirmed:** `agent_wrapper` IS in the ClawTeam execution loop (capture happened). pi resolves the local `harness-local` provider from its `models.json` (baseUrl) — no `--base-url` needed on the pi argv.
+
+### Findings / follow-ups (verify-on-first-run)
+1. **Per-step `duration_ms` = 0** in `trajectory_events` (tokens captured fine). The `PiEventParser` normalizer isn't extracting per-event timing from pi 0.73.1's stream. *Fix in Plan B or a focused normalizer patch — the PRD's "verify against the real stream format" mandate.*
+2. **`runs` rollup table not populated** by the launch path (events are the source of truth; `query_run_summaries` computes on demand). Confirm Plan D surfaces it.
+3. **Throughput:** the 3-task sequential build-test run did not finish within the 420s bound on the local 30B (1 of 3 tasks done). Not a sovereignty failure — a speed observation. Raise the launch `--timeout` or use a smaller task set for local-model demos.
+4. **Air-gap nit:** `mlx_lm.server` makes a startup metadata call to `huggingface.co`. For a sealed run, launch it with `HF_HUB_OFFLINE=1` (and `HF_HUB_DISABLE_TELEMETRY=1`).

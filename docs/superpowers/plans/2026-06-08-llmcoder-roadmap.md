@@ -39,7 +39,8 @@ B needs A. C needs A + Runbook 0. D needs A. E needs A+B+C+D + Runbook 0. F need
 
 ## Status
 
-- [x] Runbook 0 written; mlx-lm isolated; dev model downloading. Live serve + ≥30 tok/s check pending download.
-- [x] **Plan A — Phase 1: code complete, 633 tests green, no-key air-gap unit proof passes.** Remaining: live `ms launch` e2e (Task 6 Step 3), gated on Runbook 0 server.
-- [ ] Plan B / Plan C / Plan D
+- [x] **Runbook 0 DONE** — mlx-lm isolated, dev model served, ~73 tok/s single-stream (≥30 ✓).
+- [x] **Plan A — Phase 1 COMPLETE & live-validated.** 7 code tasks (incl. Task 7: sovereign decomposer/improve clients), **634 tests green**, no-key air-gap proof, and a full `ms launch` ran on the local model with no key (384 trajectory events captured, clean teardown). Follow-up findings logged in Runbook 0 (per-step `duration_ms`=0; local throughput).
+- [ ] Plan B (tool-calling reliability) — also fold in the `duration_ms` normalizer fix
+- [ ] Plan C / Plan D
 - [ ] Runbook E / Runbook F
