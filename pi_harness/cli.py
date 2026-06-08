@@ -1,13 +1,13 @@
-"""pi-harness command-line entry point.
+"""ms command-line entry point (aka ``pi-harness``, the legacy alias).
 
 The canonical headless surface. Every subcommand is a thin shim over the same
 in-process modules the FastAPI editor uses — no duplicated business logic.
 
-  pi-harness launch <spec>      lint -> decompose -> spec_to_runspec -> Coordinator.launch
-  pi-harness lint <spec>        pure linter; exits 0/1/2 by severity
-  pi-harness decompose <spec>   print JSON task list; gated on lint score 1.0
-  pi-harness spec new|ls|show|rm|edit   manage ~/.pi-harness/specs/*.md
-  pi-harness serve              boot the dashboard backend (spec router + runs + corpus + guards + ws)
+  ms launch <spec>      lint -> decompose -> spec_to_runspec -> Coordinator.launch
+  ms lint <spec>        pure linter; exits 0/1/2 by severity
+  ms decompose <spec>   print JSON task list; gated on lint score 1.0
+  ms spec new|ls|show|rm|edit   manage ~/.pi-harness/specs/*.md
+  ms serve              boot the dashboard backend (spec router + runs + corpus + guards + ws)
 """
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ from pi_harness.spec.format import parse_spec_file, spec_path, spec_storage_dir
 from pi_harness.spec.runspec import build_coordinator, spec_to_runspec
 
 app = typer.Typer(
-    name="pi-harness",
-    help="Pi-Agent Harness — spec-driven multi-agent run launcher.",
+    name="ms",
+    help="mannschaft (ms) — spec-driven multi-agent run launcher.",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -44,7 +44,7 @@ def _root(
     version: bool = typer.Option(
         False, "--version", "-V",
         callback=_version_callback, is_eager=True,
-        help="Show the pi-harness version and exit.",
+        help="Show the ms version and exit.",
     ),
 ) -> None:
     """Root callback — owns --version so all subcommands inherit it."""
@@ -157,7 +157,7 @@ def launch(
         typer.echo(f"  isolated on branch: {handle.run_branch}")
 
     if detach:
-        typer.echo(f"  detached — stop it with: pi-harness stop {handle.run_id}")
+        typer.echo(f"  detached — stop it with: ms stop {handle.run_id}")
         return
 
     try:

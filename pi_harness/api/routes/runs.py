@@ -75,7 +75,7 @@ def get_timeline(request: Request, run_id: str) -> TimelineDTO:
 def branch_run(request: Request, run_id: str, body: BranchRequest) -> BranchResponse:
     # NOTE: this is a MUTATING endpoint that launches a real (credit-spending)
     # run. There is no auth layer — the dashboard is designed to bind loopback
-    # only (`pi-harness serve` defaults to 127.0.0.1). Do NOT expose this server
+    # only (`ms serve` defaults to 127.0.0.1). Do NOT expose this server
     # on a non-loopback interface without adding authentication (audit #19).
     # `overrides` is not an arbitrary dict: apply_overrides() rejects any key
     # outside {goal, topology, sync_mode, model_tier} with ValueError -> 409.

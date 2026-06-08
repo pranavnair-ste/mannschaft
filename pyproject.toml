@@ -23,7 +23,8 @@ dependencies = [
 ]
 
 [project.scripts]
-pi-harness = "pi_harness.cli:app"
+ms = "pi_harness.cli:app"
+pi-harness = "pi_harness.cli:app"  # legacy alias; prefer `ms`
 
 [project.optional-dependencies]
 dev = [
