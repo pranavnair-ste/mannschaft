@@ -39,7 +39,7 @@ B needs A. C needs A + Runbook 0. D needs A. E needs A+B+C+D + Runbook 0. F need
 
 ## Status
 
-- [x] Runbook 0 kicked off (mlx-lm isolated; dev model downloading)
-- [ ] **Plan A — Phase 1** (this is next; detailed plan written)
+- [x] Runbook 0 written; mlx-lm isolated; dev model downloading. Live serve + ≥30 tok/s check pending download.
+- [x] **Plan A — Phase 1: code complete, 633 tests green, no-key air-gap unit proof passes.** Remaining: live `ms launch` e2e (Task 6 Step 3), gated on Runbook 0 server.
 - [ ] Plan B / Plan C / Plan D
 - [ ] Runbook E / Runbook F
