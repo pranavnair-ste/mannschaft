@@ -61,6 +61,18 @@ def _guard_real_run_worktrees(request):
         yield gw
 
 
+@pytest.fixture(autouse=True)
+def _isolate_keystore(monkeypatch, tmp_path_factory):
+    """Point the key store at a throwaway path so no test reads or writes the
+    developer's real ~/.config/pi-harness/.env. ``config.load_config()`` loads
+    the keystore with override=True, so without this an existing real key would
+    clobber a test's fake OPENAI_API_KEY. Tests that exercise the keystore set
+    PI_HARNESS_KEYSTORE_PATH themselves (their setenv runs later and wins)."""
+    p = tmp_path_factory.mktemp("keystore") / ".env"  # dir exists, .env does not
+    monkeypatch.setenv("PI_HARNESS_KEYSTORE_PATH", str(p))
+    yield
+
+
 @pytest.fixture
 def tmp_corpus_root(tmp_path: Path) -> Path:
     """A temporary corpus root with all expected classification subdirs.

@@ -94,6 +94,16 @@ def load_config(env_file: Optional[str | Path] = ".env") -> Config:
         if env_path.exists():
             load_dotenv(env_path, override=False)
 
+    # Keystore is the canonical secret home: load it AFTER the repo .env with
+    # override=True so a key set via `ms models key` / the Settings UI wins over
+    # a stale repo .env value and reaches the launch env (Config.openai_api_key
+    # → ClawTeamClient._env() → the pi subprocess).
+    from pi_harness.keystore import keystore_path
+
+    _ks = keystore_path()
+    if _ks.exists():
+        load_dotenv(_ks, override=True)
+
     # Sovereign default: the key is OPTIONAL. A local-provider run needs none.
     # Enforcement is deferred to the point of use — agent_wrapper raises a clear
     # ConfigError if an `api` bucket is selected without a key (see Phase 1).
