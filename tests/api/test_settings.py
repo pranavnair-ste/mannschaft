@@ -177,3 +177,68 @@ def test_put_settings_local_rejects_ssrf_url(client, settings_home):
         "local_base_url": "http://169.254.169.254/v1",
     })
     assert r.status_code == 400, r.text
+
+
+# ---- provider & model management (key / cloud-models / run-active / 409) ----
+
+
+def test_put_key_validates_stores_and_masks(client, monkeypatch):
+    import pi_harness.discovery as discovery
+    from pi_harness import keystore
+
+    monkeypatch.setattr(discovery, "list_models", lambda *a, **k: {"models": ["gpt-5", "o3"]})
+    r = client.put("/settings/key", json={"provider": "openai", "api_key": "sk-LIVEKEY1234"})
+    assert r.status_code == 200, r.text
+    assert "sk-LIVEKEY1234" not in r.text  # raw key never echoed
+    body = r.json()
+    assert body["models"] == ["gpt-5", "o3"]
+    assert body["masked"].endswith("1234")
+    assert keystore.get_key("openai") == "sk-LIVEKEY1234"
+
+
+def test_put_key_invalid_returns_400_no_leak(client, monkeypatch):
+    import pi_harness.discovery as discovery
+
+    monkeypatch.setattr(
+        discovery, "list_models",
+        lambda *a, **k: {"models": [], "error": "invalid or unauthorized key"},
+    )
+    r = client.put("/settings/key", json={"provider": "openai", "api_key": "sk-BADKEY9999"})
+    assert r.status_code == 400
+    assert "sk-BADKEY9999" not in r.text
+
+
+def test_cloud_models_returns_list_when_key_stored(client, monkeypatch):
+    import pi_harness.discovery as discovery
+    from pi_harness import keystore
+
+    keystore.set_key("openai", "sk-stored1234")
+    monkeypatch.setattr(discovery, "list_models", lambda *a, **k: {"models": ["gpt-5"]})
+    r = client.get("/settings/models/cloud-models?provider=openai")
+    assert r.status_code == 200
+    assert r.json()["models"] == ["gpt-5"]
+
+
+def test_cloud_models_no_key_returns_error(client):
+    r = client.get("/settings/models/cloud-models?provider=openai")
+    assert r.status_code == 200
+    assert r.json()["models"] == []
+    assert r.json().get("error")
+
+
+def test_run_active_reflects_running_run(client, seed_run):
+    assert client.get("/settings/run-active").json()["active"] is False
+    seed_run(run_id="run-x", status="running")
+    body = client.get("/settings/run-active").json()
+    assert body["active"] is True
+    assert body["run_id"] == "run-x"
+
+
+def test_put_settings_409_when_run_active(client, seed_run, settings_home):
+    seed_run(run_id="run-busy", status="running")
+    r = client.put("/settings/models", json={
+        "orchestrator": {"provider": "api", "model": "gpt-5"},
+        "builder": {"provider": "api", "model": "gpt-5-mini"},
+        "local_base_url": "http://localhost:8080/v1",
+    })
+    assert r.status_code == 409, r.text
