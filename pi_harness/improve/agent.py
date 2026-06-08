@@ -329,15 +329,21 @@ class ImproveAgent:
     construct an ``OpenAI`` client from the config.
     """
 
-    def __init__(self, config: Any, client: Any | None = None) -> None:
+    def __init__(self, config: Any, client: Any | None = None, settings: Any | None = None) -> None:
         self._config = config
-        if client is None:
-            # Local import: avoids a hard openai dep at module-import time for
-            # call sites that only need the helper functions.
-            from openai import OpenAI
+        if client is not None:
+            # Injected client (tests): resolve the model from settings only.
+            from pi_harness.settings import load_settings
 
-            client = OpenAI(api_key=config.openai_api_key)
-        self._client = client
+            s = settings if settings is not None else load_settings()
+            self._model = s.orchestrator.model
+            self._client = client
+        else:
+            # Sovereign local-first: build the client + model from the reasoning
+            # bucket (local needs no key; api requires OPENAI_API_KEY).
+            from pi_harness.llm_direct import reasoning_client_and_model
+
+            self._client, self._model = reasoning_client_and_model(config, settings)
 
     def analyze(
         self,
@@ -374,7 +380,7 @@ class ImproveAgent:
         for attempt in range(MAX_RETRIES + 1):
             content = _call_llm(
                 self._client,
-                model=self._config.reasoning_model,
+                model=self._model,
                 messages=messages,
             )
             try:

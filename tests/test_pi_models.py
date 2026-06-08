@@ -124,3 +124,33 @@ def test_ensure_pi_provider_tolerates_garbled_existing_file(tmp_path: Path) -> N
     )
     data = json.loads(path.read_text())
     assert "harness-local" in data["providers"]
+
+
+def test_ensure_local_provider_from_settings_registers_when_local(tmp_path: Path) -> None:
+    from pi_harness.pi_models import ensure_local_provider_from_settings
+    from pi_harness.settings import BucketConfig, HarnessSettings
+
+    models_path = tmp_path / "models.json"
+    settings = HarnessSettings(
+        orchestrator=BucketConfig(provider="local", model="mlx-a"),
+        builder=BucketConfig(provider="local", model="mlx-b"),
+        local_base_url="http://localhost:8080/v1",
+    )
+    assert ensure_local_provider_from_settings(settings, pi_models_path=models_path) is True
+    data = json.loads(models_path.read_text())
+    prov = data["providers"]["harness-local"]
+    assert prov["baseUrl"] == "http://localhost:8080/v1"
+    assert {m["id"] for m in prov["models"]} == {"mlx-a", "mlx-b"}
+
+
+def test_ensure_local_provider_from_settings_noop_when_all_api(tmp_path: Path) -> None:
+    from pi_harness.pi_models import ensure_local_provider_from_settings
+    from pi_harness.settings import BucketConfig, HarnessSettings
+
+    models_path = tmp_path / "models.json"
+    settings = HarnessSettings(
+        orchestrator=BucketConfig(provider="api", model="gpt-5"),
+        builder=BucketConfig(provider="api", model="gpt-5-mini"),
+    )
+    assert ensure_local_provider_from_settings(settings, pi_models_path=models_path) is False
+    assert not models_path.exists()

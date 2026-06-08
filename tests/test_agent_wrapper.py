@@ -13,6 +13,37 @@ from pi_harness.trajectory.store import init_db, query_events
 SAMPLE = Path(__file__).resolve().parent.parent / "docs" / "captures" / "pi-stdout-json.ndjson"
 
 
+def test_resolve_local_bucket_needs_no_key(monkeypatch):
+    from pi_harness import agent_wrapper
+    from pi_harness.settings import HarnessSettings, BucketConfig
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        agent_wrapper, "load_settings", lambda: HarnessSettings(
+            orchestrator=BucketConfig(provider="local", model="mlx-x"),
+            builder=BucketConfig(provider="local", model="mlx-y"),
+        ),
+    )
+    assert agent_wrapper._resolve_provider_model("reasoning") == (
+        agent_wrapper.LOCAL_PROVIDER_NAME, "mlx-x")
+
+
+def test_resolve_api_bucket_without_key_raises(monkeypatch):
+    from pi_harness import agent_wrapper
+    from pi_harness.config import ConfigError
+    from pi_harness.settings import HarnessSettings, BucketConfig
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        agent_wrapper, "load_settings", lambda: HarnessSettings(
+            orchestrator=BucketConfig(provider="api", model="gpt-5"),
+            builder=BucketConfig(provider="local", model="mlx-y"),
+        ),
+    )
+    with pytest.raises(ConfigError, match="OPENAI_API_KEY"):
+        agent_wrapper._resolve_provider_model("reasoning")
+
+
 def test_build_argv_pi_includes_stdin_safe_flags():
     argv = _build_argv("pi", ["my prompt"])
     assert argv[0] == "pi"
@@ -48,12 +79,19 @@ def test_build_argv_pi_omits_provider_when_none():
     assert "--model" not in argv
 
 
-def test_resolve_provider_model_api_bucket_defaults(tmp_path, monkeypatch):
-    """With no saved settings, 'reasoning' resolves to (openai, gpt-5),
-    'fast' to (openai, gpt-5-mini) — matching today's behavior."""
+def test_resolve_provider_model_api_bucket_resolves_openai(tmp_path, monkeypatch):
+    """An explicitly-selected 'api' bucket resolves to (openai, <model>) when a
+    key is present. (Robust to the local-default flip: uses explicit settings,
+    not the defaults.)"""
     monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     from pi_harness.agent_wrapper import _resolve_provider_model
+    from pi_harness.settings import BucketConfig, HarnessSettings, save_settings
 
+    save_settings(HarnessSettings(
+        orchestrator=BucketConfig(provider="api", model="gpt-5"),
+        builder=BucketConfig(provider="api", model="gpt-5-mini"),
+    ))
     assert _resolve_provider_model("reasoning") == ("openai", "gpt-5")
     assert _resolve_provider_model("fast") == ("openai", "gpt-5-mini")
 
@@ -63,6 +101,7 @@ def test_resolve_provider_model_local_uses_harness_local_provider(tmp_path, monk
     name of the local provider we registered in pi's models.json — currently
     'harness-local'."""
     monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")  # builder bucket is api here
     from pi_harness.agent_wrapper import _resolve_provider_model
     from pi_harness.settings import BucketConfig, HarnessSettings, save_settings
 

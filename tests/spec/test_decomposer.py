@@ -11,6 +11,8 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import ValidationError
 
+from pi_harness.config import ConfigError
+from pi_harness.settings import BucketConfig, HarnessSettings
 from pi_harness.spec.decomposer import (
     DecomposedTask,
     Decomposer,
@@ -19,6 +21,13 @@ from pi_harness.spec.decomposer import (
     PROMPT_PATH,
 )
 from pi_harness.spec.format import Spec
+
+
+def _api_settings(model: str = "o-test") -> HarnessSettings:
+    return HarnessSettings(
+        orchestrator=BucketConfig(provider="api", model=model),
+        builder=BucketConfig(provider="api", model=model),
+    )
 
 
 def _spec() -> Spec:
@@ -103,24 +112,41 @@ def test_decomposition_result_holds_tasks() -> None:
 
 
 def test_decomposer_init_loads_prompt() -> None:
-    d = Decomposer(_fake_config(), client=MagicMock())
+    d = Decomposer(_fake_config(), client=MagicMock(), settings=_api_settings())
     assert "decomposition assistant" in d.prompt.lower()
 
 
-def test_decomposer_requires_api_key() -> None:
+def test_decomposer_api_bucket_requires_key() -> None:
+    """No injected client + api reasoning bucket + no key → ConfigError."""
     cfg = MagicMock()
     cfg.openai_api_key = ""
-    cfg.reasoning_model = "o-test"
-    with pytest.raises(DecomposerError, match="openai_api_key"):
-        Decomposer(cfg, client=MagicMock())
+    with pytest.raises(ConfigError, match="OPENAI_API_KEY"):
+        Decomposer(cfg, settings=_api_settings())
 
 
-def test_decomposer_requires_reasoning_model() -> None:
+def test_decomposer_requires_model() -> None:
+    """A reasoning bucket with no model is a configuration error."""
     cfg = MagicMock()
     cfg.openai_api_key = "sk-test"
-    cfg.reasoning_model = ""
-    with pytest.raises(DecomposerError, match="reasoning_model"):
-        Decomposer(cfg, client=MagicMock())
+    settings = HarnessSettings(
+        orchestrator=BucketConfig(provider="local", model=""),
+        builder=BucketConfig(provider="local", model=""),
+    )
+    with pytest.raises(ConfigError, match="model"):
+        Decomposer(cfg, settings=settings)
+
+
+def test_decomposer_local_bucket_needs_no_key() -> None:
+    """A local reasoning bucket builds a client with no OPENAI_API_KEY."""
+    cfg = MagicMock()
+    cfg.openai_api_key = ""
+    settings = HarnessSettings(
+        orchestrator=BucketConfig(provider="local", model="mlx-x"),
+        builder=BucketConfig(provider="local", model="mlx-x"),
+        local_base_url="http://localhost:8080/v1",
+    )
+    d = Decomposer(cfg, settings=settings)  # must not raise
+    assert d.model == "mlx-x"
 
 
 # ---------- LLM call + retry ----------
@@ -146,7 +172,7 @@ def test_decomposer_returns_tasks_on_valid_response() -> None:
     client = MagicMock()
     client.chat.completions.create.return_value = _chat_response(payload)
 
-    tasks = Decomposer(_fake_config(), client=client).decompose(_spec())
+    tasks = Decomposer(_fake_config(), client=client, settings=_api_settings()).decompose(_spec())
 
     assert [t.id for t in tasks] == ["t-cancel", "t-cleanup"]
     assert tasks[1].blocked_by == ["t-cancel"]
@@ -173,7 +199,7 @@ def test_decomposer_retries_on_malformed_then_succeeds() -> None:
         _chat_response({"tasks": [{}]}),   # attempt 2 -> pydantic error
         _chat_response(good),              # attempt 3 -> success
     ]
-    tasks = Decomposer(_fake_config(), client=client).decompose(_spec())
+    tasks = Decomposer(_fake_config(), client=client, settings=_api_settings()).decompose(_spec())
     assert len(tasks) == 1
     assert client.chat.completions.create.call_count == 3
 
@@ -182,5 +208,5 @@ def test_decomposer_raises_after_max_retries() -> None:
     client = MagicMock()
     client.chat.completions.create.return_value = _chat_response("still broken")
     with pytest.raises(DecomposerError, match="failed after"):
-        Decomposer(_fake_config(), client=client).decompose(_spec())
+        Decomposer(_fake_config(), client=client, settings=_api_settings()).decompose(_spec())
     assert client.chat.completions.create.call_count == 3  # 1 initial + 2 retries

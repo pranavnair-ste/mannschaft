@@ -40,7 +40,7 @@ __all__ = [
 PROFILE_NAME_REASONING = "pi-openai-reasoning"
 PROFILE_NAME_FAST = "pi-openai-fast"
 
-DEFAULT_AGENT_CLI = "codex"
+DEFAULT_AGENT_CLI = "pi"
 
 ROLE_PROFILE_MAP: Dict[str, str] = {
     "orchestrator": PROFILE_NAME_REASONING,
@@ -88,9 +88,9 @@ class ProfileSpec:
     name: str
     agent: str
     model: str
-    api_key_env: str
     tier: str
     description: str
+    api_key_env: Optional[str] = None
     command: Optional[str] = None
     base_url: Optional[str] = None
 
@@ -98,14 +98,17 @@ class ProfileSpec:
         """Return positional + flag args for ``clawteam profile set``.
 
         The full subprocess call is ``["clawteam", "profile", "set", *args]``.
+        A local profile emits no ``--api-key-env`` (sovereign: no key needed)
+        and carries ``--base-url`` for the local endpoint.
         """
         args: List[str] = [
             self.name,
             "--agent", self.agent,
             "--model", self.model,
-            "--api-key-env", self.api_key_env,
-            "--description", self.description,
         ]
+        if self.api_key_env is not None:
+            args.extend(["--api-key-env", self.api_key_env])
+        args.extend(["--description", self.description])
         if self.command is not None:
             args.extend(["--command", self.command])
         if self.base_url is not None:
@@ -114,28 +117,36 @@ class ProfileSpec:
 
 
 def build_profile_specs(config: Config) -> List[ProfileSpec]:
-    """Build the two profile specs from a Config snapshot."""
+    """Build the two profile specs from the live HarnessSettings (local-first).
+
+    Provider/model/base_url come from the user's saved bucket selection
+    (``settings.py``), not from ``config``. A ``local`` bucket yields a pi
+    profile pointed at the local endpoint with **no** api key env; an ``api``
+    bucket yields a pi profile that sources ``OPENAI_API_KEY``. ``config`` is
+    retained for signature stability / future api-key-env sourcing.
+    """
+    from pi_harness.settings import load_settings
+
+    settings = load_settings()
+
+    def _spec(name: str, tier: str, bucket, description: str) -> ProfileSpec:
+        if bucket.provider == "local":
+            return ProfileSpec(
+                name=name, agent=DEFAULT_AGENT_CLI, model=bucket.model,
+                tier=tier, description=description,
+                api_key_env=None, base_url=settings.local_base_url,
+            )
+        return ProfileSpec(
+            name=name, agent=DEFAULT_AGENT_CLI, model=bucket.model,
+            tier=tier, description=description,
+            api_key_env="OPENAI_API_KEY", base_url=None,
+        )
+
     return [
-        ProfileSpec(
-            name=PROFILE_NAME_REASONING,
-            agent=DEFAULT_AGENT_CLI,
-            model=config.reasoning_model,
-            api_key_env="OPENAI_API_KEY",
-            tier="reasoning",
-            description=(
-                "Pi-Agent Harness reasoning tier — used by orchestrator + reviewer roles."
-            ),
-        ),
-        ProfileSpec(
-            name=PROFILE_NAME_FAST,
-            agent=DEFAULT_AGENT_CLI,
-            model=config.fast_model,
-            api_key_env="OPENAI_API_KEY",
-            tier="fast",
-            description=(
-                "Pi-Agent Harness fast tier — used by builder + scout roles."
-            ),
-        ),
+        _spec(PROFILE_NAME_REASONING, "reasoning", settings.orchestrator,
+              "LLMCoder reasoning tier — orchestrator + reviewer roles."),
+        _spec(PROFILE_NAME_FAST, "fast", settings.builder,
+              "LLMCoder fast tier — builder + scout roles."),
     ]
 
 
@@ -144,10 +155,11 @@ def _spec_to_doc_dict(spec: ProfileSpec) -> dict:
         "name": spec.name,
         "agent": spec.agent,
         "model": spec.model,
-        "api_key_env": spec.api_key_env,
         "tier": spec.tier,
         "description": spec.description,
     }
+    if spec.api_key_env is not None:
+        d["api_key_env"] = spec.api_key_env
     if spec.command is not None:
         d["command"] = spec.command
     if spec.base_url is not None:

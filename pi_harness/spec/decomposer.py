@@ -62,26 +62,31 @@ def _call_llm(client: Any, *, model: str, messages: list[dict[str, str]]) -> str
 
 
 class Decomposer:
-    """Calls the OpenAI reasoning tier and validates the structured response.
+    """Calls the reasoning tier (local-first) and validates the structured
+    response.
 
-    ``client`` is injectable for tests; production callers pass ``None`` and an
-    ``OpenAI`` client is built from the config's API key.
+    Provider/model come from the reasoning (orchestrator) bucket in
+    HarnessSettings — ``local`` by default (no key), or ``api`` (requires
+    ``OPENAI_API_KEY``). ``client``/``settings`` are injectable for tests;
+    production callers pass ``None`` and a client is built from the bucket.
     """
 
     MAX_RETRIES = 2  # in addition to the first attempt
 
-    def __init__(self, config: Any, client: Any | None = None) -> None:
-        if not getattr(config, "openai_api_key", None):
-            raise DecomposerError("config.openai_api_key is required")
-        if not getattr(config, "reasoning_model", None):
-            raise DecomposerError("config.reasoning_model is required")
+    def __init__(self, config: Any, client: Any | None = None, settings: Any | None = None) -> None:
+        from pi_harness.llm_direct import reasoning_client_and_model
+
         self.config = config
         self.prompt = PROMPT_PATH.read_text(encoding="utf-8")
-        if client is None:
-            from openai import OpenAI
+        if client is not None:
+            # Injected client (tests): resolve the model from settings only.
+            from pi_harness.settings import load_settings
 
-            client = OpenAI(api_key=config.openai_api_key)
-        self._client = client
+            s = settings if settings is not None else load_settings()
+            self.model = s.orchestrator.model
+            self._client = client
+        else:
+            self._client, self.model = reasoning_client_and_model(config, settings)
 
     def decompose(self, spec: Spec) -> list[DecomposedTask]:
         attempts = self.MAX_RETRIES + 1
@@ -93,7 +98,7 @@ class Decomposer:
         for _ in range(attempts):
             try:
                 raw = _call_llm(
-                    self._client, model=self.config.reasoning_model, messages=messages
+                    self._client, model=self.model, messages=messages
                 )
                 data = json.loads(raw)
                 return DecompositionResult.model_validate(data).tasks

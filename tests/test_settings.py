@@ -22,11 +22,11 @@ def test_load_settings_returns_defaults_when_file_missing(home: Path) -> None:
     from pi_harness.settings import load_settings
 
     s = load_settings()
-    assert s.orchestrator.provider == "api"
-    assert s.orchestrator.model == "gpt-5"
-    assert s.builder.provider == "api"
-    assert s.builder.model == "gpt-5-mini"
-    assert s.local_base_url == "http://localhost:11434/v1"
+    assert s.orchestrator.provider == "local"
+    assert s.orchestrator.model == "mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit"
+    assert s.builder.provider == "local"
+    assert s.builder.model == "mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit"
+    assert s.local_base_url == "http://localhost:8080/v1"
 
 
 def test_save_then_load_roundtrips(home: Path) -> None:
@@ -73,8 +73,8 @@ def test_load_settings_tolerates_partial_file(home: Path) -> None:
     assert s.orchestrator.provider == "local"
     assert s.orchestrator.model == "qwen3:30b"
     # Builder fell back to default since the file omitted it.
-    assert s.builder.provider == "api"
-    assert s.builder.model == "gpt-5-mini"
+    assert s.builder.provider == "local"
+    assert s.builder.model == "mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit"
 
 
 def test_invalid_provider_raises(home: Path) -> None:

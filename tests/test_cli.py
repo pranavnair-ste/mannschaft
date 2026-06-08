@@ -71,7 +71,7 @@ def test_help_runs_cleanly():
     from pi_harness.cli import app
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    assert "pi-harness" in result.stdout.lower()
+    assert "mannschaft" in result.stdout.lower()
 
 
 def test_version_flag():

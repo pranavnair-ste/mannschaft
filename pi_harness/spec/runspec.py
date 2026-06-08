@@ -1,7 +1,7 @@
 """Bridge: a decomposed Spec -> Plan 5 RunSpec.
 
 The single mapping point between the spec layer's DecomposedTask shape and the
-topology layer's RunSpec / AgentSpec / TaskDef. The CLI's ``pi-harness launch``
+topology layer's RunSpec / AgentSpec / TaskDef. The CLI's ``ms launch``
 and the editor's ``POST /specs/{id}/launch`` both go through here so they emit
 identical runs from the same spec.
 
@@ -92,7 +92,7 @@ def build_coordinator(config):
     """Wire a real Plan 5 Coordinator with the real Plan 3 corpus reader and the
     Plan 4 improve runner module.
 
-    The CLI's ``pi-harness launch`` and the editor's ``/launch`` route share
+    The CLI's ``ms launch`` and the editor's ``/launch`` route share
     this so a launched run primes the corpus and schedules improve identically.
     The improve *module* itself is passed as ``improve_runner`` — its
     module-level ``run_for_completed_run(run_id, config, *, session_id=...)``
