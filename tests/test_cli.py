@@ -397,3 +397,80 @@ def test_serve_boots_the_dashboard_app(monkeypatch):
     assert "/healthz" in paths, paths
     assert "/runs" in paths, paths
     assert "/specs" in paths, paths
+
+
+# --------------------------------------------------------------------------- #
+# ms models / ms setup
+# --------------------------------------------------------------------------- #
+
+
+def _seed_running(db_path, run_id="run-busy"):
+    from datetime import datetime, timezone
+
+    from pi_harness.trajectory.runs import register_run
+
+    register_run(
+        run_id=run_id, spec_id="s", topology="sequential", sync_mode="per_agent",
+        session_id=None, goal="g", team_name="t",
+        started_at=datetime(2026, 6, 8, tzinfo=timezone.utc), run_spec_json="{}",
+        status="running", db_path=db_path,
+    )
+
+
+def test_models_set_blocked_when_run_active(monkeypatch, tmp_path):
+    from pi_harness.cli import app
+
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path / "home"))
+    db = tmp_path / "traj.db"
+    monkeypatch.setenv("PI_HARNESS_TRAJECTORY_DB_PATH", str(db))
+    _seed_running(db)
+
+    res = runner.invoke(app, ["models", "set", "--bucket", "orchestrator", "--provider", "api", "--model", "gpt-5"])
+    assert res.exit_code == 1, res.output
+    assert "active" in res.output.lower()
+
+
+def test_models_set_succeeds_when_idle(monkeypatch, tmp_path):
+    from pi_harness.cli import app
+    from pi_harness.settings import load_settings
+
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PI_HARNESS_TRAJECTORY_DB_PATH", str(tmp_path / "traj.db"))
+
+    res = runner.invoke(app, ["models", "set", "--bucket", "builder", "--provider", "api", "--model", "gpt-5-mini"])
+    assert res.exit_code == 0, res.output
+    s = load_settings()
+    assert s.builder.provider == "api"
+    assert s.builder.model == "gpt-5-mini"
+
+
+def test_models_set_local_registers_pi_provider(monkeypatch, tmp_path):
+    import pi_harness.pi_models as pm
+    from pi_harness.cli import app
+
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PI_HARNESS_TRAJECTORY_DB_PATH", str(tmp_path / "traj.db"))
+    calls = []
+    monkeypatch.setattr(pm, "ensure_local_provider_from_settings", lambda *a, **k: calls.append(1) or True)
+
+    res = runner.invoke(app, ["models", "set", "--bucket", "orchestrator", "--provider", "local", "--model", "mlx-z"])
+    assert res.exit_code == 0, res.output
+    assert calls == [1]  # local provider registration was triggered
+
+
+def test_models_key_stores_without_echo(monkeypatch, tmp_path):
+    import getpass
+
+    import pi_harness.discovery as discovery
+    from pi_harness import keystore
+    from pi_harness.cli import app
+
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PI_HARNESS_KEYSTORE_PATH", str(tmp_path / "secrets.env"))
+    monkeypatch.setattr(getpass, "getpass", lambda *a, **k: "sk-CLIKEY5678")
+    monkeypatch.setattr(discovery, "list_models", lambda *a, **k: {"models": ["gpt-5"]})
+
+    res = runner.invoke(app, ["models", "key", "--provider", "openai"])
+    assert res.exit_code == 0, res.output
+    assert "sk-CLIKEY5678" not in res.output  # raw key never echoed
+    assert keystore.get_key("openai") == "sk-CLIKEY5678"

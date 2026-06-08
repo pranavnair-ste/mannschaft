@@ -87,6 +87,20 @@ def test_config_missing_key_ok_for_local(monkeypatch):
     assert cfg.openai_api_key == ""
 
 
+def test_config_loads_key_from_keystore(monkeypatch, tmp_path):
+    """A key stored in the keystore file reaches Config.openai_api_key even
+    with no repo .env and no env var set (so it reaches the launch env)."""
+    from pi_harness.config import load_config
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    ks = tmp_path / "secrets.env"
+    ks.write_text("OPENAI_API_KEY=sk-fromkeystore\n")
+    monkeypatch.setenv("PI_HARNESS_KEYSTORE_PATH", str(ks))
+
+    cfg = load_config(env_file=None)
+    assert cfg.openai_api_key == "sk-fromkeystore"
+
+
 def test_config_repr_masks_api_key(monkeypatch):
     """Config repr must NOT contain the API key — it leaks into tracebacks/logs
     otherwise (pytest prints fixture values, logging prints config, etc.)."""
