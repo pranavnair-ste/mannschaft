@@ -16,7 +16,11 @@ import os
 from pathlib import Path
 from typing import Iterable
 
-__all__ = ["DEFAULT_PI_MODELS_PATH", "ensure_pi_provider"]
+__all__ = [
+    "DEFAULT_PI_MODELS_PATH",
+    "ensure_pi_provider",
+    "ensure_local_provider_from_settings",
+]
 
 
 def DEFAULT_PI_MODELS_PATH() -> Path:  # function so tests can monkeypatch home
@@ -90,3 +94,30 @@ def ensure_pi_provider(
 
     data["providers"][name] = provider
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def ensure_local_provider_from_settings(
+    settings=None, *, pi_models_path: Path | str | None = None
+) -> bool:
+    """If any bucket selects ``local``, register the harness-local provider in
+    pi's models.json so a run works without first opening the Settings UI.
+
+    Returns True iff a registration was performed. This is the launch-path
+    counterpart to the Settings-UI side effect in ``api/routes/settings.py``.
+    """
+    from pi_harness.agent_wrapper import LOCAL_PROVIDER_NAME
+    from pi_harness.settings import load_settings
+
+    s = settings if settings is not None else load_settings()
+    local_models = [
+        b.model for b in (s.orchestrator, s.builder) if b.provider == "local"
+    ]
+    if not local_models:
+        return False
+    ensure_pi_provider(
+        name=LOCAL_PROVIDER_NAME,
+        base_url=s.local_base_url,
+        model_ids=local_models,
+        pi_models_path=pi_models_path,
+    )
+    return True

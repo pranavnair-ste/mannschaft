@@ -146,6 +146,11 @@ def launch(
         return
 
     cfg = load_config()
+    # Sovereign default: register the local provider in pi's models.json from
+    # the saved settings so a run uses the local MLX endpoint without first
+    # touching the Settings UI (no-op when all buckets are `api`).
+    from pi_harness.pi_models import ensure_local_provider_from_settings
+    ensure_local_provider_from_settings()
     tasks = _decompose_or_die(spec, cfg)
     run_spec = spec_to_runspec(
         spec, tasks, session_id=session, executor=executor, sync_profile=sync_profile
