@@ -8,10 +8,7 @@ GET  /settings/models/local-models    → query the user's local OpenAI-compatib
 """
 from __future__ import annotations
 
-import ipaddress
-import socket
 from typing import Literal
-from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
@@ -25,53 +22,9 @@ from pi_harness.settings import (
     load_settings,
     save_settings,
 )
+from pi_harness.url_validation import validate_local_url  # re-exported; tests import it here
 
 router = APIRouter(prefix="/settings/models", tags=["settings"])
-
-
-def validate_local_url(url: str) -> str:
-    """Return ``url`` if it safely points at a loopback/private model server,
-    else raise ValueError.
-
-    'Local model server' means localhost or a LAN host. Accepting an arbitrary
-    URL here is SSRF: an attacker could make the dashboard fetch internal
-    services or cloud metadata (169.254.169.254). We require http(s) and that
-    EVERY resolved address is loopback or RFC1918-private — never link-local
-    (which would include the metadata endpoint), multicast, or global (audit
-    #6/#23)."""
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError("local model URL must use http or https")
-    host = parsed.hostname
-    if not host:
-        raise ValueError("local model URL has no host")
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    try:
-        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
-    except socket.gaierror as exc:
-        raise ValueError(f"cannot resolve host {host!r}") from exc
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        # Unwrap an IPv4-mapped IPv6 address (::ffff:a.b.c.d) and classify the
-        # EMBEDDED IPv4 — ipaddress reports the mapped form as generically
-        # private (not loopback/link-local), which would let ::ffff:169.254.169.254
-        # (cloud metadata) or ::ffff:8.8.8.8 (public) slip through on a dual-stack
-        # host, defeating the guard below.
-        if ip.version == 6 and ip.ipv4_mapped is not None:
-            ip = ip.ipv4_mapped
-        if ip.is_unspecified:
-            raise ValueError("local model URL resolves to an unspecified address")
-        if ip.is_loopback:
-            continue  # 127.0.0.0/8 and ::1 are always fine
-        # Block link-local explicitly — it covers the cloud metadata endpoint
-        # (169.254.169.254) and is otherwise treated as 'private' by ipaddress.
-        if ip.is_link_local:
-            raise ValueError("local model URL resolves to a link-local address (blocked)")
-        if not ip.is_private:
-            raise ValueError(
-                "local model URL must point at a loopback or private (LAN) address"
-            )
-    return url
 
 
 class BucketBody(BaseModel):
