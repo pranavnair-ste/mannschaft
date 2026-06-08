@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 from typing import IO, Iterable
 
+from pi_harness.settings import load_settings
 from pi_harness.trajectory.agent_capture import PiEventParser
 from pi_harness.trajectory.store import init_db, write_event
 
@@ -46,8 +47,6 @@ def _resolve_provider_model(bucket: str) -> tuple[str, str]:
     (registered by the settings API into ~/.pi/agent/models.json when the
     user picks Local). The model string is whatever the user saved.
     """
-    from pi_harness.settings import load_settings
-
     settings = load_settings()
     if bucket == "reasoning":
         cfg = settings.orchestrator
@@ -57,6 +56,13 @@ def _resolve_provider_model(bucket: str) -> tuple[str, str]:
         raise ValueError(f"unknown bucket {bucket!r}; expected 'reasoning' or 'fast'")
 
     if cfg.provider == "api":
+        if not os.environ.get("OPENAI_API_KEY", "").strip():
+            from pi_harness.config import ConfigError
+            raise ConfigError(
+                f"bucket {bucket!r} selects the 'api' provider but OPENAI_API_KEY "
+                "is unset. Set it, or switch the bucket to 'local' (the sovereign "
+                "default)."
+            )
         return ("openai", cfg.model)
     if cfg.provider == "local":
         return (LOCAL_PROVIDER_NAME, cfg.model)
