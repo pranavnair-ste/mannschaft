@@ -5,12 +5,19 @@ topology layer's RunSpec / AgentSpec / TaskDef. The CLI's ``ms launch``
 and the editor's ``POST /specs/{id}/launch`` both go through here so they emit
 identical runs from the same spec.
 
-Model: one agent per decomposed task (agent name == task id). The task's
-description becomes both the agent's ``task_prompt`` (its standing instruction
-in the ClawTeam template) and the ClawTeam task goal. The decomposer's
-``blocked_by`` chains are carried verbatim as the explicit ``TaskDef`` DAG,
-which Coordinator.launch consumes via ``RunSpec.tasks`` instead of
-synthesizing one-task-per-agent itself.
+Model: **one agent per role** (agent name == role, e.g. ``builder``). Every
+decomposed task of that role is owned by the single role agent and seeded onto
+the ClawTeam board, so they all run in that agent's ONE worktree. The agent's
+``task_prompt`` is its standing instruction (the spec goal + its tasks, in
+order); each task's description stays the per-task ClawTeam goal. The
+decomposer's ``blocked_by`` chains are carried verbatim as the explicit
+``TaskDef`` DAG, which Coordinator.launch consumes via ``RunSpec.tasks``.
+
+Why per-role, not per-task: one-agent-per-task gave every task its own isolated
+ClawTeam worktree (artifacts only merge at run end), so a ``create file → use
+file → test it`` chain failed — a later task couldn't see an earlier task's
+files. Per-role keeps a role's whole sequence in one worktree, which also stays
+correct when the decomposer omits a ``blocked_by`` edge between related tasks.
 """
 from __future__ import annotations
 
@@ -39,6 +46,20 @@ ROLE_TIER_MAP: dict[Role, ModelTier] = {
 }
 
 
+def _role_task_prompt(spec: Spec, role_tasks: Sequence[DecomposedTask]) -> str:
+    """Standing instruction for a role agent. One task → its description
+    verbatim (the board carries the same goal). Multiple tasks → the spec goal
+    plus the tasks numbered in order, so the agent sees its whole plan and knows
+    they share one working directory."""
+    if len(role_tasks) == 1:
+        return role_tasks[0].description
+    steps = "\n".join(f"{i}. {t.description}" for i, t in enumerate(role_tasks, 1))
+    return (
+        f"{spec.goal}\n\nComplete these steps in order, in a single working "
+        f"directory (do not assume another agent created files for you):\n{steps}"
+    )
+
+
 def spec_to_runspec(
     spec: Spec,
     tasks: Sequence[DecomposedTask],
@@ -53,26 +74,35 @@ def spec_to_runspec(
     spec's own run-shape fields — this is how the CLI surfaces ``--session``,
     ``--executor`` and ``--sync-profile``.
     """
-    agents: list[AgentSpec] = []
-    task_defs: list[TaskDef] = []
+    # Group tasks by role, preserving first-appearance order (so the leader
+    # selection — first orchestrator, else first agent — stays deterministic).
+    roles_in_order: list[Role] = []
+    tasks_by_role: dict[Role, list[DecomposedTask]] = {}
     for t in tasks:
         role = Role(t.assigned_role)
-        agents.append(
-            AgentSpec(
-                name=t.id,
-                role=role,
-                model_tier=ROLE_TIER_MAP[role],
-                task_prompt=t.description,
-            )
+        if role not in tasks_by_role:
+            tasks_by_role[role] = []
+            roles_in_order.append(role)
+        tasks_by_role[role].append(t)
+
+    agents: list[AgentSpec] = [
+        AgentSpec(
+            name=role.value,
+            role=role,
+            model_tier=ROLE_TIER_MAP[role],
+            task_prompt=_role_task_prompt(spec, tasks_by_role[role]),
         )
-        task_defs.append(
-            TaskDef(
-                task_id=t.id,
-                agent_name=t.id,
-                goal=t.description,
-                blocked_by=list(t.blocked_by),
-            )
+        for role in roles_in_order
+    ]
+    task_defs: list[TaskDef] = [
+        TaskDef(
+            task_id=t.id,
+            agent_name=Role(t.assigned_role).value,
+            goal=t.description,
+            blocked_by=list(t.blocked_by),
         )
+        for t in tasks
+    ]
 
     return RunSpec(
         goal=spec.goal,

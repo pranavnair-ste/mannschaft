@@ -73,21 +73,41 @@ def test_bridge_builds_real_runspec() -> None:
     assert rs.sync_mode is SyncMode.PER_AGENT
     assert rs.executor == "pi"
 
-    assert [a.name for a in rs.agents] == ["t-lead", "t-cancel", "t-cleanup"]
+    # One agent per ROLE (not per task): the two builder tasks collapse onto a
+    # single builder agent so they share one ClawTeam worktree.
+    assert [a.name for a in rs.agents] == ["orchestrator", "builder"]
     assert all(isinstance(a, AgentSpec) for a in rs.agents)
     lead = rs.agents[0]
     assert lead.role is Role.ORCHESTRATOR
     assert lead.model_tier is ModelTier.REASONING
-    assert lead.task_prompt == "lead the team"
+    assert lead.task_prompt == "lead the team"  # sole orchestrator task → its description
     builder = rs.agents[1]
     assert builder.role is Role.BUILDER
     assert builder.model_tier is ModelTier.FAST
+    # The builder owns both tasks; its standing prompt enumerates them in order.
+    assert builder.task_prompt is not None
+    assert "wire cancel button" in builder.task_prompt
+    assert "delete partial file" in builder.task_prompt
 
     assert all(isinstance(t, TaskDef) for t in rs.tasks)
     by = {t.task_id: t for t in rs.tasks}
     assert by["t-cancel"].blocked_by == ["t-lead"]
-    assert by["t-cancel"].agent_name == "t-cancel"
+    assert by["t-cancel"].agent_name == "builder"  # owned by the role agent, not a per-task agent
+    assert by["t-cleanup"].agent_name == "builder"
     assert by["t-cancel"].goal == "wire cancel button"
+
+
+def test_same_role_tasks_collapse_to_one_agent() -> None:
+    """Dependent same-role tasks must share ONE agent so they share ONE ClawTeam
+    worktree — otherwise a 'create file → use it → test it' chain fails because
+    each task ran in an isolated worktree (the bug a local e2e run surfaced)."""
+    rs = spec_to_runspec(_spec(), _tasks())
+    builders = [a for a in rs.agents if a.role is Role.BUILDER]
+    assert len(builders) == 1
+    owners = {t.agent_name for t in rs.tasks if t.task_id in ("t-cancel", "t-cleanup")}
+    assert owners == {builders[0].name}
+    # Total agents == distinct roles, not number of tasks.
+    assert len(rs.agents) == 2
 
 
 def test_bridge_overrides_win_over_spec_fields() -> None:
@@ -153,10 +173,10 @@ def test_runspec_consumable_by_real_coordinator(tmp_path) -> None:
     # The orchestrator task became the ClawTeam leader.
     install_toml = client.install_template.call_args.args[1]
     parsed = tomllib.loads(install_toml)
-    assert parsed["template"]["leader"]["name"] == "t-lead"
+    assert parsed["template"]["leader"]["name"] == "orchestrator"
     assert parsed["template"]["leader"]["type"] == "orchestrator"
     worker_names = {a["name"] for a in parsed["template"]["agents"]}
-    assert worker_names == {"t-cancel", "t-cleanup"}
+    assert worker_names == {"builder"}
 
 
 def test_build_coordinator_wires_real_components(tmp_path) -> None:

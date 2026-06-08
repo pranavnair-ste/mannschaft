@@ -375,10 +375,12 @@ def test_launch_builds_real_runspec_and_returns_run_id(client: TestClient) -> No
     # The route built a REAL RunSpec from the decomposed tasks (bridge not mocked).
     run_spec = fake_coord.launch.call_args.args[0]
     assert isinstance(run_spec, RunSpec)
-    assert [a.name for a in run_spec.agents] == ["t-lead", "t-cancel"]
+    # One agent per role (orchestrator + builder), not one per task.
+    assert [a.name for a in run_spec.agents] == ["orchestrator", "builder"]
     assert run_spec.tasks is not None
     by = {t.task_id: t for t in run_spec.tasks}
     assert by["t-cancel"].blocked_by == ["t-lead"]
+    assert by["t-cancel"].agent_name == "builder"
     # Status transitions through 'running' → 'complete' once the background
     # finalizer drives wait_for_completion to a success result; the running
     # state itself is asserted in test_launch_schedules_background_finalization.

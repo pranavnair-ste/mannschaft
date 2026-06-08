@@ -100,11 +100,15 @@ def test_launch_calls_coordinator_with_decomposed_tasks(good_spec, monkeypatch):
     assert result.exit_code == 0, result.stdout
     assert "run-abc" in result.stdout
     fake_coord.launch.assert_called_once()
-    # The bridge (real) built a RunSpec carrying the decomposed task DAG.
+    # The bridge (real) built a RunSpec carrying the decomposed task DAG. Both
+    # tasks are builder-role, so they collapse onto ONE builder agent (one
+    # worktree); the task DAG itself is carried verbatim.
     run_spec = fake_coord.launch.call_args.args[0]
-    assert [a.name for a in run_spec.agents] == ["t-toggle", "t-cookie"]
+    assert [a.name for a in run_spec.agents] == ["builder"]
     by = {t.task_id: t for t in run_spec.tasks}
     assert by["t-cookie"].blocked_by == ["t-toggle"]
+    assert by["t-toggle"].agent_name == "builder"
+    assert by["t-cookie"].agent_name == "builder"
 
 
 def test_launch_non_detach_waits_and_finalizes(good_spec, monkeypatch):
