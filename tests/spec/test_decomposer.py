@@ -204,6 +204,42 @@ def test_decomposer_retries_on_malformed_then_succeeds() -> None:
     assert client.chat.completions.create.call_count == 3
 
 
+def test_decomposer_feeds_error_back_into_retry() -> None:
+    """A schema failure must be fed back to the model on retry, not re-prompted
+    identically. Small local models (e.g. Qwen3-Coder under json_object mode)
+    drop required fields like `acceptance_criterion`; an identical re-prompt
+    repeats the same omission, so the retry must carry the prior output + a
+    corrective instruction naming what was missing."""
+    missing = {  # valid JSON, but every task drops name + acceptance_criterion
+        "tasks": [{"id": "t-1", "description": "d", "assigned_role": "builder"}]
+    }
+    good = {
+        "tasks": [
+            {
+                "id": "t-1", "name": "n", "description": "d",
+                "acceptance_criterion": "Clicking Cancel during upload aborts the request within 200ms",
+                "blocked_by": [], "assigned_role": "builder",
+            }
+        ]
+    }
+    client = MagicMock()
+    client.chat.completions.create.side_effect = [
+        _chat_response(missing),  # attempt 1 -> pydantic error (missing fields)
+        _chat_response(good),     # attempt 2 -> success, given the feedback
+    ]
+
+    tasks = Decomposer(_fake_config(), client=client, settings=_api_settings()).decompose(_spec())
+
+    assert len(tasks) == 1
+    assert client.chat.completions.create.call_count == 2
+    # The 2nd call must carry the failure context: the model's own prior output
+    # (assistant turn) followed by a corrective user turn naming the missing field.
+    second_messages = client.chat.completions.create.call_args_list[1].kwargs["messages"]
+    assert [m["role"] for m in second_messages] == ["system", "user", "assistant", "user"]
+    assert second_messages[-2]["content"] == json.dumps(missing)
+    assert "acceptance_criterion" in second_messages[-1]["content"]
+
+
 def test_decomposer_raises_after_max_retries() -> None:
     client = MagicMock()
     client.chat.completions.create.return_value = _chat_response("still broken")

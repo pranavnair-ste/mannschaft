@@ -61,6 +61,18 @@ def _call_llm(client: Any, *, model: str, messages: list[dict[str, str]]) -> str
     return response.choices[0].message.content or ""
 
 
+def _repair_message(err: Exception) -> str:
+    """A corrective user turn appended after a rejected response so the model
+    self-corrects on retry instead of repeating the same mistake."""
+    return (
+        f"Your previous response was rejected: {err}\n\n"
+        "Return the COMPLETE corrected JSON object now. Every task object MUST "
+        "include all six keys: id, name, description, acceptance_criterion, "
+        "blocked_by, assigned_role. Never omit name or acceptance_criterion. "
+        "Output only the JSON object — no prose, no markdown fences."
+    )
+
+
 class Decomposer:
     """Calls the reasoning tier (local-first) and validates the structured
     response.
@@ -96,15 +108,19 @@ class Decomposer:
             {"role": "user", "content": _spec_to_user_message(spec)},
         ]
         for _ in range(attempts):
+            raw = _call_llm(self._client, model=self.model, messages=messages)
             try:
-                raw = _call_llm(
-                    self._client, model=self.model, messages=messages
-                )
                 data = json.loads(raw)
                 return DecompositionResult.model_validate(data).tasks
             except (json.JSONDecodeError, ValidationError) as e:
                 last_err = e
-                continue
+                # Feed the failure back so the model self-corrects, rather than
+                # re-prompting identically (which makes a deterministic
+                # field-dropping model repeat the same omission every attempt).
+                messages = messages + [
+                    {"role": "assistant", "content": raw},
+                    {"role": "user", "content": _repair_message(e)},
+                ]
         raise DecomposerError(
             f"decomposition failed after {attempts} attempts: {last_err}"
         )
