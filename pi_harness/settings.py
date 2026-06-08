@@ -31,7 +31,8 @@ __all__ = [
 Provider = Literal["api", "local"]
 _VALID_PROVIDERS = {"api", "local"}
 
-DEFAULT_LOCAL_BASE_URL = "http://localhost:11434/v1"  # Ollama default
+DEFAULT_LOCAL_BASE_URL = "http://localhost:8080/v1"  # mlx_lm.server default port
+DEFAULT_LOCAL_MODEL = "mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit"
 
 
 @dataclass(frozen=True)
@@ -65,8 +66,8 @@ def settings_path() -> Path:
 
 def _default_settings() -> HarnessSettings:
     return HarnessSettings(
-        orchestrator=BucketConfig(provider="api", model="gpt-5"),
-        builder=BucketConfig(provider="api", model="gpt-5-mini"),
+        orchestrator=BucketConfig(provider="local", model=DEFAULT_LOCAL_MODEL),
+        builder=BucketConfig(provider="local", model=DEFAULT_LOCAL_MODEL),
     )
 
 

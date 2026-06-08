@@ -22,9 +22,10 @@ def test_get_settings_returns_defaults_on_fresh_install(client, settings_home):
     r = client.get("/settings/models")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["orchestrator"] == {"provider": "api", "model": "gpt-5"}
-    assert body["builder"] == {"provider": "api", "model": "gpt-5-mini"}
-    assert body["local_base_url"] == "http://localhost:11434/v1"
+    _local_model = "mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit"
+    assert body["orchestrator"] == {"provider": "local", "model": _local_model}
+    assert body["builder"] == {"provider": "local", "model": _local_model}
+    assert body["local_base_url"] == "http://localhost:8080/v1"
 
 
 def test_put_settings_persists_and_returns_current(client, settings_home):
