@@ -37,7 +37,8 @@ class Config:
     """Frozen configuration snapshot.
 
     Attributes:
-        openai_api_key: OpenAI API key (required).
+        openai_api_key: OpenAI API key (optional; required only when an 'api'
+            provider bucket is selected).
         reasoning_model: Model assigned to orchestrator + reviewer roles.
         fast_model: Model assigned to builder + scout roles.
         clawteam_state_dir: Directory ClawTeam owns. The harness passes this to
@@ -85,18 +86,18 @@ def load_config(env_file: Optional[str | Path] = ".env") -> Config:
         A frozen :class:`Config`.
 
     Raises:
-        ConfigError: If ``OPENAI_API_KEY`` is unset.
+        ConfigError: If ``OBS_PORT`` is non-integer/out of range, or
+            observability is enabled without ``OBS_AUTH_TOKEN``.
     """
     if env_file is not None:
         env_path = Path(env_file)
         if env_path.exists():
             load_dotenv(env_path, override=False)
 
+    # Sovereign default: the key is OPTIONAL. A local-provider run needs none.
+    # Enforcement is deferred to the point of use — agent_wrapper raises a clear
+    # ConfigError if an `api` bucket is selected without a key (see Phase 1).
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise ConfigError(
-            "OPENAI_API_KEY is required. Set it in the environment or in a .env file."
-        )
 
     obs_enabled = _bool_env(os.environ.get("PI_HARNESS_OBS_ENABLED", ""))
     obs_host = os.environ.get("OBS_HOST", "127.0.0.1").strip() or "127.0.0.1"

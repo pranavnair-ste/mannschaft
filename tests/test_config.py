@@ -75,14 +75,16 @@ def test_config_overrides_via_env(monkeypatch, tmp_path):
     assert cfg.trajectory_db_path == (tmp_path / "traj.db").resolve(strict=False)
 
 
-def test_config_missing_key_raises(monkeypatch):
-    """No OPENAI_API_KEY in env (and no .env file) must raise."""
-    from pi_harness.config import load_config, ConfigError
+def test_config_missing_key_ok_for_local(monkeypatch):
+    """No OPENAI_API_KEY is fine — local is the sovereign default; the key is
+    only required when an `api` bucket is actually selected (enforced in
+    agent_wrapper, not here)."""
+    from pi_harness.config import load_config
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    with pytest.raises(ConfigError, match="OPENAI_API_KEY"):
-        load_config(env_file=None)
+    cfg = load_config(env_file=None)
+    assert cfg.openai_api_key == ""
 
 
 def test_config_repr_masks_api_key(monkeypatch):
