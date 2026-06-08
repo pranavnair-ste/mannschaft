@@ -547,6 +547,163 @@ def spec_edit(spec_id: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# model & provider management
+# --------------------------------------------------------------------------- #
+
+models_app = typer.Typer(help="Discover and manage LLM providers & models.")
+app.add_typer(models_app, name="models")
+
+_BUCKETS = ("orchestrator", "builder")
+
+
+def _active_run_or_none(cfg) -> Optional[str]:
+    """Idle-gate source of truth — the same query the /settings/run-active route
+    uses, so CLI and GUI never disagree."""
+    from pi_harness.trajectory.runs import query_run_summaries
+
+    rows = query_run_summaries(status="running", limit=1, db_path=cfg.trajectory_db_path)
+    return rows[0].run_id if rows else None
+
+
+@models_app.command("set")
+def models_set(
+    bucket: str = typer.Option(..., "--bucket", help="orchestrator | builder"),
+    provider: str = typer.Option(..., "--provider", help="local | api"),
+    model: str = typer.Option(..., "--model", help="Model id to assign."),
+) -> None:
+    """Assign a model to a bucket. Blocked while a run is building."""
+    from dataclasses import replace as dc_replace
+
+    from pi_harness.config import load_config
+    from pi_harness.settings import BucketConfig, load_settings, save_settings
+
+    if bucket not in _BUCKETS:
+        typer.echo(f"error: --bucket must be one of {_BUCKETS}", err=True)
+        raise typer.Exit(code=2)
+    if provider not in ("local", "api"):
+        typer.echo("error: --provider must be 'local' or 'api'", err=True)
+        raise typer.Exit(code=2)
+
+    cfg = load_config()
+    active = _active_run_or_none(cfg)
+    if active:
+        typer.echo(
+            f"error: run {active} is active; stop it (`ms stop {active}`) before switching models",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    settings = dc_replace(load_settings(), **{bucket: BucketConfig(provider=provider, model=model)})
+    save_settings(settings)
+    if provider == "local":
+        # Mirror the PUT /settings/models side-effect: register the local
+        # provider in pi's models.json so the picker isn't a lie.
+        from pi_harness.pi_models import ensure_local_provider_from_settings
+
+        ensure_local_provider_from_settings(settings)
+    typer.echo(f"{bucket} → {provider}:{model}")
+
+
+@models_app.command("key")
+def models_key(
+    provider: str = typer.Option("openai", "--provider", help="Provider to set a key for."),
+) -> None:
+    """Securely store an API key (hidden prompt); validated via discovery."""
+    import getpass
+
+    from pi_harness import discovery, keystore
+
+    if provider not in keystore.PROVIDER_ENV:
+        typer.echo(f"error: unknown provider {provider!r}", err=True)
+        raise typer.Exit(code=2)
+    value = getpass.getpass(f"{provider} API key: ")
+    if not value.strip():
+        typer.echo("error: empty key", err=True)
+        raise typer.Exit(code=1)
+    result = discovery.list_models(provider, api_key=value)
+    if result.get("error") or not result.get("models"):
+        typer.echo("error: invalid or unauthorized key", err=True)
+        raise typer.Exit(code=1)
+    keystore.set_key(provider, value)
+    typer.echo(
+        f"stored {provider} key {keystore.mask(value)} "
+        f"({len(result['models'])} models available)"
+    )
+
+
+@models_app.command("list")
+def models_list() -> None:
+    """Show current bucket selection + available models (local always; cloud if
+    a key is stored)."""
+    from pi_harness import discovery, keystore
+    from pi_harness.settings import load_settings
+
+    s = load_settings()
+    typer.echo(f"orchestrator: {s.orchestrator.provider}:{s.orchestrator.model}")
+    typer.echo(f"builder:      {s.builder.provider}:{s.builder.model}")
+
+    local = discovery.list_models("local", base_url=s.local_base_url)
+    typer.echo(f"\nlocal @ {s.local_base_url}:")
+    if local.get("error"):
+        typer.echo(f"  ({local['error']})")
+    for m in local.get("models", []):
+        typer.echo(f"  {m}")
+
+    if keystore.has_key("openai"):
+        cloud = discovery.list_models("openai", api_key=keystore.get_key("openai"))
+        typer.echo("\nopenai (cloud):")
+        if cloud.get("error"):
+            typer.echo(f"  ({cloud['error']})")
+        for m in cloud.get("models", []):
+            typer.echo(f"  {m}")
+    else:
+        typer.echo("\nopenai (cloud): no key stored — run `ms models key`")
+
+
+@app.command()
+def setup() -> None:
+    """Interactive first-run setup: pick a provider, connect, assign models."""
+    from pi_harness import discovery, keystore
+    from pi_harness.settings import BucketConfig, HarnessSettings, load_settings, save_settings
+
+    s = load_settings()
+    provider = typer.prompt("Provider [local/api]", default="local").strip()
+    if provider not in ("local", "api"):
+        typer.echo("error: provider must be 'local' or 'api'", err=True)
+        raise typer.Exit(code=2)
+
+    base_url = s.local_base_url
+    if provider == "api":
+        if not keystore.has_key("openai"):
+            models_key(provider="openai")  # hidden prompt + validate + store
+        avail = discovery.list_models("openai", api_key=keystore.get_key("openai"))
+    else:
+        base_url = typer.prompt("Local server base URL", default=s.local_base_url).strip()
+        avail = discovery.list_models("local", base_url=base_url)
+
+    models = avail.get("models", [])
+    if models:
+        typer.echo("Available models:")
+        for m in models:
+            typer.echo(f"  - {m}")
+    default_model = models[0] if models else ""
+    orch = typer.prompt("Model for orchestrator bucket", default=default_model).strip()
+    bld = typer.prompt("Model for builder bucket", default=orch).strip()
+
+    settings = HarnessSettings(
+        orchestrator=BucketConfig(provider=provider, model=orch),
+        builder=BucketConfig(provider=provider, model=bld),
+        local_base_url=base_url,
+    )
+    save_settings(settings)
+    if provider == "local":
+        from pi_harness.pi_models import ensure_local_provider_from_settings
+
+        ensure_local_provider_from_settings(settings)
+    typer.echo(f"saved: orchestrator={provider}:{orch}  builder={provider}:{bld}")
+
+
+# --------------------------------------------------------------------------- #
 # serve
 # --------------------------------------------------------------------------- #
 
