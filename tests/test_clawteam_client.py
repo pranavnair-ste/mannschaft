@@ -118,9 +118,18 @@ def test_peek_inbox_parses_json(cfg):
     assert "--limit" in cmd and "5" in cmd
 
 
-def test_register_profile_invokes_profile_set(cfg):
+def test_register_profile_invokes_profile_set(cfg, monkeypatch, tmp_path):
     from pi_harness.clawteam.client import ClawTeamClient
     from pi_harness.clawteam_profile import build_profile_specs
+    from pi_harness.settings import BucketConfig, HarnessSettings, save_settings
+
+    # Pin explicit api settings so this exercises the cloud-fallback profile
+    # (with --api-key-env), independent of the local-default flip.
+    monkeypatch.setenv("PI_HARNESS_HOME", str(tmp_path / "home"))
+    save_settings(HarnessSettings(
+        orchestrator=BucketConfig(provider="api", model="gpt-5"),
+        builder=BucketConfig(provider="api", model="gpt-5-mini"),
+    ))
 
     client = ClawTeamClient(cfg)
     specs = build_profile_specs(cfg)
@@ -133,6 +142,7 @@ def test_register_profile_invokes_profile_set(cfg):
     cmd = mock_run.call_args.args[0]
     assert "profile" in cmd and "set" in cmd
     assert "pi-openai-reasoning" in cmd
+    assert "--agent" in cmd and "pi" in cmd
     assert "--model" in cmd and "gpt-5" in cmd
     assert "--api-key-env" in cmd and "OPENAI_API_KEY" in cmd
 
