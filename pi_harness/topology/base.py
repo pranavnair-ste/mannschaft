@@ -126,6 +126,11 @@ def completion_protocol(agent_name: str) -> str:
     *what*) and never learn how to CLOSE a task on the ClawTeam board, so the
     run hangs until timeout. This envelope teaches the *how*; the agent name is
     interpolated and the team name is read from the pane's CLAWTEAM_TEAM_NAME.
+
+    An agent may own MORE THAN ONE task (one-agent-per-role groups a role's whole
+    sequence onto a single agent), so the protocol is a drain loop: do every task
+    you own, re-listing after each completion because finishing one task unblocks
+    the next, and only exit when all of them are completed.
     """
     return (
         "\n\n---\n"
@@ -133,14 +138,19 @@ def completion_protocol(agent_name: str) -> str:
         f"- Your agent name is '{agent_name}'. Your team name is in the "
         "$CLAWTEAM_TEAM_NAME environment variable.\n"
         "- The task board is ALREADY seeded — do NOT create new tasks.\n"
-        "- Find your task: run `clawteam task list \"$CLAWTEAM_TEAM_NAME\"` and "
-        f"pick the task whose owner is '{agent_name}'.\n"
-        "- If it is `blocked`, re-run that command every ~10s until it is "
-        "unblocked (its blockers were completed by other agents).\n"
-        "- Do the work described above.\n"
-        "- Then mark it done: `clawteam task update \"$CLAWTEAM_TEAM_NAME\" "
-        "<your-task-id> --status completed`.\n"
-        "- Exit once your task(s) are completed."
+        "- You may own MORE THAN ONE task. List the board with "
+        "`clawteam task list \"$CLAWTEAM_TEAM_NAME\"` and find EVERY task whose "
+        f"owner is '{agent_name}'.\n"
+        "- Work them one at a time in dependency order. For each task that is "
+        "NOT blocked: mark it `--status in_progress`, do the work described "
+        "above for that task, then mark it `--status completed`. Use the EXACT "
+        "task id shown in the list — never invent an id.\n"
+        "- After completing a task, LIST AGAIN: finishing one task often "
+        "unblocks the next task you own. If a task you own is still `blocked`, "
+        "wait ~10s and re-list (its blockers are being completed elsewhere).\n"
+        "- Only exit when EVERY task you own shows `completed`.\n"
+        "- Update command: `clawteam task update \"$CLAWTEAM_TEAM_NAME\" "
+        "<your-task-id> --status completed` (use `in_progress` while working)."
     )
 
 

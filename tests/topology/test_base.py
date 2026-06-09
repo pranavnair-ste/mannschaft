@@ -184,6 +184,24 @@ class TestCompletionProtocolInjection:
         assert "--status completed" in builder["task"]
         assert "'bob'" in builder["task"]
 
+    def test_protocol_instructs_draining_all_owned_tasks(self):
+        """One-agent-per-role means a single agent owns MULTIPLE tasks, so the
+        protocol must make it do EVERY task and re-list after each completion
+        (finishing one unblocks the next) — not stop after the first, which
+        leaves the dependent tasks blocked and hangs the run until timeout."""
+        from pi_harness.topology.base import completion_protocol
+
+        text = completion_protocol("bob")
+        low = text.lower()
+        assert "every task" in low  # all owned tasks, not just "the task"
+        assert "list again" in low  # re-list after completing to catch unblocks
+        assert "only exit when every task" in low  # exit condition is ALL done
+        assert "never invent" in low  # use real ids (gpt-4o hallucinated one)
+        # Still carries the basics the other tests and the agent rely on.
+        assert "clawteam task update" in text
+        assert "--status completed" in text
+        assert "'bob'" in text
+
     def test_protocol_appended_to_default_prompt_too(self):
         """Agents with no task_prompt still get the protocol after the default."""
         spec = RunSpec(
