@@ -25,6 +25,17 @@ test("branch button POSTs and succeeds", async ({ page }) => {
   expect([200, 409]).toContain(resp.status());
 });
 
+test("cost panel shows wall-clock and sovereign label for a local run", async ({ page }) => {
+  await page.goto("/runs/r-fixture-1");
+  const panel = page.getByTestId("cost-panel");
+  await expect(panel).toBeVisible();
+  // All-local fixture run: cost is labelled sovereign, never a misleading $0.000.
+  await expect(panel.getByTestId("cost-amount")).toContainText("Local · sovereign · $0 external");
+  await expect(panel.getByTestId("cost-amount")).not.toContainText("$0.000");
+  // Wall-clock standard measure: fixture ran 12.5s.
+  await expect(panel.getByTestId("wall-clock")).toContainText("12.5s");
+});
+
 test("corpus health page renders gauge", async ({ page }) => {
   await page.goto("/corpus");
   await expect(page.getByTestId("corpus-gauge")).toBeVisible();

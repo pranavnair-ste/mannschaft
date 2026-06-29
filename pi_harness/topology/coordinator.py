@@ -215,8 +215,15 @@ class Coordinator:
         )
         self._task_specs[run_id] = tasks
 
+        from pi_harness.settings import load_settings
         from pi_harness.topology.runspec_codec import runspec_to_json
         from pi_harness.trajectory.runs import mark_run_status, register_run
+
+        # Capture the live per-bucket providers into the stored RunSpec so the
+        # dashboard can label this run sovereign (all-local) vs cloud. Providers
+        # live in HarnessSettings (not on the RunSpec), so they must be snapshot
+        # at launch — branch reloads use runspec_from_json, which ignores them.
+        run_settings = load_settings()
 
         try:
             # Register the run so the dashboard can list it with real status /
@@ -235,7 +242,7 @@ class Coordinator:
                 goal=spec.goal,
                 team_name=team_name,
                 started_at=handle.started_at,
-                run_spec_json=runspec_to_json(spec),
+                run_spec_json=runspec_to_json(spec, settings=run_settings),
                 status="running",
                 parent_run_id=parent_run_id,
                 branch_from_step=branch_from_step,

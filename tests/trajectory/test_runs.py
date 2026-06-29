@@ -224,3 +224,79 @@ def test_wall_clock_none_while_running(db: Path):
     s = get_run_summary("wc-running", db_path=db)
     assert s is not None
     assert s.wall_clock_s is None
+
+
+def test_sovereign_true_when_all_buckets_local(db: Path):
+    """A run whose serialized RunSpec records all-local buckets is sovereign."""
+    from pi_harness.settings import BucketConfig, HarnessSettings
+    from pi_harness.topology.base import (
+        AgentSpec, ModelTier, Role, RunSpec, SyncMode, TopologyMode,
+    )
+    from pi_harness.topology.runspec_codec import runspec_to_json
+    from pi_harness.trajectory.runs import get_run_summary
+
+    spec = RunSpec(
+        goal="g",
+        agents=[AgentSpec(name="b", role=Role.BUILDER, model_tier=ModelTier.FAST)],
+        mode=TopologyMode.SEQUENTIAL, sync_mode=SyncMode.PER_AGENT,
+        corpus_classifications=[],
+    )
+    settings = HarnessSettings(
+        orchestrator=BucketConfig(provider="local", model="qwen-local"),
+        builder=BucketConfig(provider="local", model="qwen-local"),
+    )
+    register_run(
+        run_id="sov-local", spec_id=None, topology="sequential", sync_mode="per_agent",
+        session_id=None, goal="g", team_name="t",
+        started_at=datetime(2026, 5, 28, tzinfo=timezone.utc),
+        run_spec_json=runspec_to_json(spec, settings=settings), db_path=db,
+    )
+    s = get_run_summary("sov-local", db_path=db)
+    assert s is not None
+    assert s.sovereign is True
+
+
+def test_sovereign_false_when_any_bucket_is_api(db: Path):
+    """A run with an 'api' bucket in its serialized RunSpec is NOT sovereign."""
+    from pi_harness.settings import BucketConfig, HarnessSettings
+    from pi_harness.topology.base import (
+        AgentSpec, ModelTier, Role, RunSpec, SyncMode, TopologyMode,
+    )
+    from pi_harness.topology.runspec_codec import runspec_to_json
+    from pi_harness.trajectory.runs import get_run_summary
+
+    spec = RunSpec(
+        goal="g",
+        agents=[AgentSpec(name="b", role=Role.BUILDER, model_tier=ModelTier.FAST)],
+        mode=TopologyMode.SEQUENTIAL, sync_mode=SyncMode.PER_AGENT,
+        corpus_classifications=[],
+    )
+    settings = HarnessSettings(
+        orchestrator=BucketConfig(provider="api", model="gpt-5.5"),
+        builder=BucketConfig(provider="local", model="qwen-local"),
+    )
+    register_run(
+        run_id="sov-api", spec_id=None, topology="sequential", sync_mode="per_agent",
+        session_id=None, goal="g", team_name="t",
+        started_at=datetime(2026, 5, 28, tzinfo=timezone.utc),
+        run_spec_json=runspec_to_json(spec, settings=settings), db_path=db,
+    )
+    s = get_run_summary("sov-api", db_path=db)
+    assert s is not None
+    assert s.sovereign is False
+
+
+def test_sovereign_false_when_buckets_unknown(db: Path):
+    """A legacy/empty run_spec_json (no recorded buckets) defaults to NOT
+    sovereign — we never falsely claim sovereignty without provider evidence."""
+    from pi_harness.trajectory.runs import get_run_summary
+
+    register_run(
+        run_id="sov-legacy", spec_id=None, topology="sequential", sync_mode="per_agent",
+        session_id=None, goal="g", team_name="t",
+        started_at=datetime(2026, 5, 28, tzinfo=timezone.utc),
+        run_spec_json="{}", db_path=db,
+    )
+    s = get_run_summary("sov-legacy", db_path=db)
+    assert s is not None
+    assert s.sovereign is False

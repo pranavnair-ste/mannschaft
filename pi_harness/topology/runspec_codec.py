@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 from pi_harness.topology.base import (
     AgentSpec,
@@ -19,8 +20,29 @@ from pi_harness.topology.base import (
     TopologyMode,
 )
 
+if TYPE_CHECKING:
+    from pi_harness.settings import HarnessSettings
 
-def runspec_to_json(spec: RunSpec) -> str:
+
+def runspec_to_json(spec: RunSpec, *, settings: "HarnessSettings | None" = None) -> str:
+    """Serialize a RunSpec to JSON for the run registry.
+
+    When ``settings`` is provided, the live per-bucket provider for each model
+    bucket (orchestrator, builder) is recorded under ``buckets`` so the
+    dashboard can later tell whether a run was fully sovereign (all-local) —
+    the providers aren't on the RunSpec itself, they live in HarnessSettings at
+    launch time. The recorded providers are descriptive metadata: ``buckets``
+    is ignored by ``runspec_from_json`` (so branch reload + round-trip equality
+    are unaffected) and is consumed only by ``runs._sovereign_from_spec_json``.
+    """
+    buckets = (
+        {
+            "orchestrator": settings.orchestrator.provider,
+            "builder": settings.builder.provider,
+        }
+        if settings is not None
+        else None
+    )
     return json.dumps(
         {
             "goal": spec.goal,
@@ -31,6 +53,7 @@ def runspec_to_json(spec: RunSpec) -> str:
             "executor": spec.executor,
             "sync_profile": spec.sync_profile,
             "spec_id": spec.spec_id,
+            "buckets": buckets,
             "agents": [
                 {
                     "name": a.name,

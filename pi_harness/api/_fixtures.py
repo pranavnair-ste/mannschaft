@@ -14,11 +14,12 @@ from pathlib import Path
 
 
 def _seed(config) -> None:
+    from pi_harness.settings import BucketConfig, HarnessSettings
     from pi_harness.topology.base import (
         AgentSpec, ModelTier, Role, RunSpec, SyncMode, TopologyMode,
     )
     from pi_harness.topology.runspec_codec import runspec_to_json
-    from pi_harness.trajectory.runs import register_run
+    from pi_harness.trajectory.runs import mark_run_status, register_run
     from pi_harness.trajectory.schema import TrajectoryEvent
     from pi_harness.trajectory.store import write_event
 
@@ -32,11 +33,24 @@ def _seed(config) -> None:
         sync_mode=SyncMode.PER_AGENT,
         corpus_classifications=[],
     )
+    # All-local buckets so the fixture run renders the sovereign cost label and
+    # the cost-panel e2e can assert "Local · sovereign · $0 external".
+    local_settings = HarnessSettings(
+        orchestrator=BucketConfig(provider="local", model="qwen-local"),
+        builder=BucketConfig(provider="local", model="qwen-local"),
+    )
+    started = datetime(2026, 5, 28, 10, 0, 0, tzinfo=timezone.utc)
     register_run(
         run_id="r-fixture-1", spec_id=None, topology="sequential", sync_mode="per_agent",
         session_id=None, goal="fixture goal", team_name="fixture-team",
-        started_at=datetime(2026, 5, 28, 10, 0, tzinfo=timezone.utc),
-        run_spec_json=runspec_to_json(spec), status="succeeded",
+        started_at=started,
+        run_spec_json=runspec_to_json(spec, settings=local_settings), status="succeeded",
+        db_path=config.trajectory_db_path,
+    )
+    # Finished 12.5s after start so the panel shows a real wall-clock measure.
+    mark_run_status(
+        "r-fixture-1", "succeeded",
+        ended_at=datetime(2026, 5, 28, 10, 0, 12, 500_000, tzinfo=timezone.utc),
         db_path=config.trajectory_db_path,
     )
     write_event(
