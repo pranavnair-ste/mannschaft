@@ -78,9 +78,13 @@ provider, and the decomposer talks directly to the local endpoint.
 cd ~/Desktop/Personal/mannschaft
 source .venv/bin/activate
 
-# 1. Point the harness at your local model (both buckets, sovereign):
+# 1. Point the harness at your local model. Fully-sovereign (both buckets local);
+#    use the 8-bit builder for full multi-task builds (4-bit is fine for decompose
+#    + interactive use). Thinking is disabled for local models automatically.
 ms models set --bucket orchestrator --provider local --model Qwen3.6-35B-A3B-MLX-4bit
-ms models set --bucket builder      --provider local --model Qwen3.6-35B-A3B-MLX-4bit
+ms models set --bucket builder      --provider local --model Qwen3.6-35B-A3B-MLX-8bit
+#    Higher-quality (NON-sovereign) alternative — frontier planner + local builder:
+#      ms models set --bucket orchestrator --provider api --model gpt-5   # needs OPENAI_API_KEY
 #    Set the endpoint URL in ~/.pi-harness/models.json -> "local_base_url".
 #    Co-located on the Mac Studio:  http://localhost:15100/v1
 #    From a laptop over Tailscale:  http://100.x.y.z:15100/v1   (allowed by the
@@ -115,11 +119,22 @@ ms launch docs/demo/uc4-todo-api.spec.md
 #   prints the run_id + the isolated run/<id> branch; watch it live in the dashboard
 ```
 
-> **On local-model convergence.** Decomposition is fast and reliable on the local
-> model. A full autonomous multi-task *build* on a local model is the frontier of
-> what's feasible today (it is the explicit subject of UC3/UC4 evaluation and T&E);
-> for a smooth demo, keep the spec small and/or show a previously-captured run in
-> the dashboard. See `DEMO.md` for the recommended beat sheet.
+> **On local-model convergence.** A full autonomous multi-task *build* does
+> converge on a local model with the right setup. Validated run: a 5-task
+> interactive-dashboard build (data → KPIs → charts → filter → README) from an
+> Excel file completed end-to-end in **~2.5 minutes** with **`gpt-5` orchestrator +
+> `Qwen3.6-35B-A3B-MLX-8bit` builder**, thinking off, $0 build cost. Two settings
+> make this reliable and are **on by default** (no action needed):
+> - **Builder thinking is disabled for local models** (`local_disable_thinking`),
+>   so each turn isn't a slow reasoning trace.
+> - **Output cap raised to 16384 tokens**, so an agent can write a whole file in
+>   one turn (a 4096 cap truncated mid-file and stalled the run).
+>
+> Use the **8-bit** builder for full builds (the 4-bit model is weaker at sustained
+> coding once thinking is off); 4-bit is fine for decomposition and interactive use.
+> For a fully-sovereign build use a local orchestrator too; `gpt-5` as orchestrator
+> is a higher-quality (non-sovereign) option that sends the spec to OpenAI. See
+> `DEMO.md` for the beat sheet.
 
 ## 7. The live dashboard
 
@@ -160,9 +175,9 @@ to fail hard in CI-style checks).
 | Symptom | Fix |
 | --- | --- |
 | `ms models list` can't reach the endpoint | Check `local_base_url` in `~/.pi-harness/models.json`; confirm oMLX is serving and the port is right. |
-| Decompose is slow / runs for minutes | A thinking model with thinking left on — the harness disables it for local decompose by default (`local_disable_thinking`); confirm your model alias resolves to the served model. |
+| Decompose or agent turns are slow / verbose | A thinking model with thinking left on. The harness disables it for local models by default (`local_disable_thinking`) — for both the decomposer and the agent loop; confirm your model alias resolves to a served Qwen model. |
 | `ms up` shows no live events | Run `ms doctor`; ensure `ms setup-obs` has run (token + dashboard checkout). |
-| A launch stalls on the local model | Local autonomous builds are the hard case — shrink the spec, raise `--timeout`, or demo a captured run. |
+| A local build stalls mid-file (agent deletes/rewrites a file) | Was the 4096-token output cap; now raised to 16384 automatically. If you still see `stopReason="length"`, the file is larger than one turn — split the task or raise the model's `maxTokens` in `~/.pi/agent/models.json`. Prefer the **8-bit** builder for full builds. |
 | Dashboard port in use | `ms doctor` reports busy ports; free them or stop a prior `ms up`. |
 | Recover after Ctrl-C during a launch | `ms stop <run_id>` kills the team and cleans up its worktree. |
 
@@ -186,9 +201,16 @@ ms stop <run_id>          # stop a run and clean up
 ```json
 {
   "orchestrator": { "provider": "local", "model": "Qwen3.6-35B-A3B-MLX-4bit" },
-  "builder":      { "provider": "local", "model": "Qwen3.6-35B-A3B-MLX-4bit" },
+  "builder":      { "provider": "local", "model": "Qwen3.6-35B-A3B-MLX-8bit" },
   "local_base_url": "http://localhost:15100/v1",
   "decompose_max_tokens": 2048,
   "local_disable_thinking": true
 }
 ```
+
+`local_disable_thinking: true` (the default) turns off Qwen's reasoning trace for
+**both** the decomposer and the local agent loop. The harness also registers local
+Qwen models in pi's registry with a generous output cap (16384 tokens) so an agent
+can write a whole file in one turn. For the highest-quality (non-sovereign) split,
+set `orchestrator` to `{ "provider": "api", "model": "gpt-5" }` and keep `builder`
+local — the validated mixed configuration.
