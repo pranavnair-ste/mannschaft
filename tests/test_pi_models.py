@@ -172,6 +172,46 @@ def test_qwen_model_gets_thinking_control_fields(tmp_path: Path) -> None:
     assert m["compat"]["thinkingFormat"] == "qwen-chat-template"
 
 
+def test_local_model_entry_has_generous_caps(tmp_path: Path) -> None:
+    """A new local entry must allow whole-file writes; the old 4096 maxTokens
+    cap made a coding agent hit stopReason=length mid-file and stall."""
+    from pi_harness.pi_models import (
+        ensure_pi_provider, _DEFAULT_MAX_TOKENS, _DEFAULT_CONTEXT_WINDOW,
+    )
+
+    assert _DEFAULT_MAX_TOKENS >= 16384
+    path = tmp_path / "models.json"
+    ensure_pi_provider(
+        name="harness-local", base_url="http://localhost:8080/v1",
+        model_ids=["Qwen3.6-35B-A3B-MLX-8bit"], pi_models_path=path,
+    )
+    m = json.loads(path.read_text())["providers"]["harness-local"]["models"][0]
+    assert m["maxTokens"] == _DEFAULT_MAX_TOKENS
+    assert m["contextWindow"] == _DEFAULT_CONTEXT_WINDOW
+
+
+def test_existing_low_caps_raised_high_preserved(tmp_path: Path) -> None:
+    """A stale 4096 cap is raised to the default; a larger custom value is kept."""
+    from pi_harness.pi_models import ensure_pi_provider, _DEFAULT_MAX_TOKENS
+
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps({"providers": {"harness-local": {
+        "baseUrl": "http://localhost:8080/v1", "apiKey": "local",
+        "api": "openai-completions",
+        "models": [
+            {"id": "Qwen3.6-35B-A3B-MLX-4bit", "name": "a", "maxTokens": 4096, "contextWindow": 32768},
+            {"id": "big-model", "name": "b", "maxTokens": 99999, "contextWindow": 262144},
+        ],
+    }}}))
+    ensure_pi_provider(
+        name="harness-local", base_url="http://localhost:8080/v1",
+        model_ids=["Qwen3.6-35B-A3B-MLX-4bit"], pi_models_path=path,
+    )
+    models = {m["id"]: m for m in json.loads(path.read_text())["providers"]["harness-local"]["models"]}
+    assert models["Qwen3.6-35B-A3B-MLX-4bit"]["maxTokens"] == _DEFAULT_MAX_TOKENS  # raised
+    assert models["big-model"]["maxTokens"] == 99999  # not lowered
+
+
 def test_non_qwen_model_has_no_thinking_fields(tmp_path: Path) -> None:
     from pi_harness.pi_models import ensure_pi_provider
 

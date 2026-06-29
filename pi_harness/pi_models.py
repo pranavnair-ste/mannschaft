@@ -30,6 +30,15 @@ def _thinking_fields(model_id: str) -> dict:
         return {"reasoning": True, "compat": {"thinkingFormat": "qwen-chat-template"}}
     return {}
 
+
+# Coding agents write whole files in a single turn. The previous 4096 cap made a
+# local model hit stopReason="length" mid-file (truncated `cat >` heredoc), then
+# delete + retry + stall. Qwen3.6-35B-A3B serves up to 262k context, so give the
+# local provider generous output + context room. Raised on managed entries below
+# (never lowered, so a user's larger custom value is preserved).
+_DEFAULT_MAX_TOKENS = 16384
+_DEFAULT_CONTEXT_WINDOW = 131072
+
 __all__ = [
     "DEFAULT_PI_MODELS_PATH",
     "ensure_pi_provider",
@@ -62,8 +71,8 @@ def _new_model_entry(model_id: str) -> dict:
     entry = {
         "id": model_id,
         "name": model_id,
-        "contextWindow": 32768,
-        "maxTokens": 4096,
+        "contextWindow": _DEFAULT_CONTEXT_WINDOW,
+        "maxTokens": _DEFAULT_MAX_TOKENS,
         "input": ["text"],
         "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
     }
@@ -112,6 +121,10 @@ def ensure_pi_provider(
     for m in existing_models:
         if isinstance(m, dict):
             m.update(_thinking_fields(m.get("id", "")))
+            # Raise stale/low caps so a coding agent can write a whole file in one
+            # turn; never lower a larger custom value.
+            m["maxTokens"] = max(int(m.get("maxTokens") or 0), _DEFAULT_MAX_TOKENS)
+            m["contextWindow"] = max(int(m.get("contextWindow") or 0), _DEFAULT_CONTEXT_WINDOW)
     provider["models"] = existing_models
 
     data["providers"][name] = provider
