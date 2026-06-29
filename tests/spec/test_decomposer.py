@@ -119,6 +119,70 @@ def test_decomposition_result_holds_tasks() -> None:
     assert len(res.tasks) == 1
 
 
+def test_decomposition_result_rejects_dangling_blocked_by() -> None:
+    """A blocked_by id with no matching task is invalid — otherwise the
+    Coordinator's toposort fails at launch on a model-invented dependency id."""
+    with pytest.raises(ValidationError, match="unknown task ids"):
+        DecompositionResult(
+            tasks=[
+                DecomposedTask(
+                    id="t-a", name="n", description="d",
+                    acceptance_criterion="x", blocked_by=["t-ghost"],
+                    assigned_role="builder",
+                )
+            ]
+        )
+
+
+def test_decomposition_result_accepts_resolvable_blocked_by() -> None:
+    res = DecompositionResult(
+        tasks=[
+            DecomposedTask(id="t-a", name="n", description="d",
+                           acceptance_criterion="x", blocked_by=[], assigned_role="builder"),
+            DecomposedTask(id="t-b", name="n", description="d",
+                           acceptance_criterion="y", blocked_by=["t-a"], assigned_role="builder"),
+        ]
+    )
+    assert [t.id for t in res.tasks] == ["t-a", "t-b"]
+
+
+def test_decomposer_retries_on_dangling_blocked_by_then_succeeds() -> None:
+    """The model invents a near-miss blocked_by id (observed live on Qwen3.6);
+    the retry loop must feed the dangling-ref error back and accept the fix."""
+    bad = {
+        "tasks": [
+            {"id": "t-impl", "name": "n", "description": "d",
+             "acceptance_criterion": "Clicking Cancel during upload aborts the request within 200ms",
+             "blocked_by": [], "assigned_role": "builder"},
+            {"id": "t-test", "name": "n", "description": "d",
+             "acceptance_criterion": "Cancelled upload leaves no partial file on the server",
+             "blocked_by": ["t-implement"], "assigned_role": "builder"},  # t-implement != t-impl
+        ]
+    }
+    good = {
+        "tasks": [
+            {"id": "t-impl", "name": "n", "description": "d",
+             "acceptance_criterion": "Clicking Cancel during upload aborts the request within 200ms",
+             "blocked_by": [], "assigned_role": "builder"},
+            {"id": "t-test", "name": "n", "description": "d",
+             "acceptance_criterion": "Cancelled upload leaves no partial file on the server",
+             "blocked_by": ["t-impl"], "assigned_role": "builder"},
+        ]
+    }
+    client = MagicMock()
+    client.chat.completions.create.side_effect = [
+        _chat_response(bad),   # attempt 1 -> dangling blocked_by -> ValidationError
+        _chat_response(good),  # attempt 2 -> corrected
+    ]
+    tasks = Decomposer(_fake_config(), client=client, settings=_api_settings()).decompose(_spec())
+    assert client.chat.completions.create.call_count == 2
+    assert tasks[1].blocked_by == ["t-impl"]
+    # The corrective turn names the offending ids + the blocked_by rule.
+    second = client.chat.completions.create.call_args_list[1].kwargs["messages"]
+    assert "blocked_by" in second[-1]["content"]
+    assert "t-implement" in second[-1]["content"]
+
+
 def test_decomposer_init_loads_prompt() -> None:
     d = Decomposer(_fake_config(), client=MagicMock(), settings=_api_settings())
     assert "decomposition assistant" in d.prompt.lower()

@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from pi_harness.spec.format import Spec
 
@@ -31,6 +31,27 @@ class DecomposedTask(BaseModel):
 
 class DecompositionResult(BaseModel):
     tasks: list[DecomposedTask]
+
+    @model_validator(mode="after")
+    def _blocked_by_refs_resolve(self) -> "DecompositionResult":
+        """Every blocked_by id must match a task id in the same response.
+
+        Thinking-capable local models (observed live on Qwen3.6-35B-A3B) invent
+        near-miss dependency ids (e.g. ``t-get-todos`` for a task actually named
+        ``t-get-todos-endpoint``). The pydantic shape check alone does not catch
+        this, so a dangling edge would only surface as a Coordinator toposort
+        failure at launch. Rejecting it here feeds the dangling-ref error into
+        the decompose retry loop so the model self-corrects before launch.
+        """
+        ids = {t.id for t in self.tasks}
+        dangling = sorted({b for t in self.tasks for b in t.blocked_by if b not in ids})
+        if dangling:
+            raise ValueError(
+                "blocked_by references unknown task ids: "
+                f"{', '.join(dangling)}. Every id in a blocked_by list MUST "
+                "exactly match the id of another task in this response."
+            )
+        return self
 
 
 class DecomposerError(RuntimeError):
@@ -88,6 +109,8 @@ def _repair_message(err: Exception) -> str:
         "Return the COMPLETE corrected JSON object now. Every task object MUST "
         "include all six keys: id, name, description, acceptance_criterion, "
         "blocked_by, assigned_role. Never omit name or acceptance_criterion. "
+        "Every id in a blocked_by list MUST exactly match the id of another task "
+        "in the response — do not invent dependency ids. "
         "Output only the JSON object — no prose, no markdown fences."
     )
 
