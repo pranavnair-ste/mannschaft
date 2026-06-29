@@ -3,8 +3,8 @@
 Shared by the settings routes and model discovery. 'Local model server' means
 localhost or a LAN host; accepting an arbitrary URL is SSRF (an attacker could
 make us fetch internal services or cloud metadata at 169.254.169.254). We
-require http(s) and that EVERY resolved address is loopback or RFC1918-private
-— never link-local, multicast, or global.
+require http(s) and that EVERY resolved address is loopback, RFC1918-private,
+or RFC6598 shared (Tailscale / CGNAT) — never link-local, multicast, or global.
 """
 from __future__ import annotations
 
@@ -13,6 +13,13 @@ import socket
 from urllib.parse import urlparse
 
 __all__ = ["validate_local_url"]
+
+# RFC-6598 shared address space (Tailscale / CGNAT). A sovereign LAN/Tailnet —
+# the documented v1 deployment reaches a shared Mac Studio inference box over
+# Tailscale (e.g. 100.94.117.87). ipaddress reports it as neither private nor
+# loopback, so it must be allowed explicitly while link-local/metadata/public
+# stay blocked.
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
 
 
 def validate_local_url(url: str) -> str:
@@ -46,6 +53,11 @@ def validate_local_url(url: str) -> str:
         # (169.254.169.254) and is otherwise treated as 'private' by ipaddress.
         if ip.is_link_local:
             raise ValueError("local model URL resolves to a link-local address (blocked)")
+        # Allow RFC-6598 shared address space (Tailscale / CGNAT) — a sovereign
+        # LAN/Tailnet, not the public internet. Checked after the link-local
+        # block so the metadata endpoint stays rejected.
+        if ip.version == 4 and ip in _CGNAT:
+            continue
         if not ip.is_private:
             raise ValueError(
                 "local model URL must point at a loopback or private (LAN) address"
