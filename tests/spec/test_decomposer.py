@@ -30,6 +30,14 @@ def _api_settings(model: str = "o-test") -> HarnessSettings:
     )
 
 
+def _local_settings(model: str = "mlx-x") -> HarnessSettings:
+    return HarnessSettings(
+        orchestrator=BucketConfig(provider="local", model=model),
+        builder=BucketConfig(provider="local", model=model),
+        local_base_url="http://localhost:8080/v1",
+    )
+
+
 def _spec() -> Spec:
     return Spec(
         id="spec-cancel",
@@ -246,3 +254,65 @@ def test_decomposer_raises_after_max_retries() -> None:
     with pytest.raises(DecomposerError, match="failed after"):
         Decomposer(_fake_config(), client=client, settings=_api_settings()).decompose(_spec())
     assert client.chat.completions.create.call_count == 3  # 1 initial + 2 retries
+
+
+# ---------- local thinking-off + token cap (DEMO-CRITICAL) ----------
+
+
+def _good_payload() -> dict:
+    return {
+        "tasks": [
+            {
+                "id": "t-only", "name": "n", "description": "d",
+                "acceptance_criterion": "Clicking Cancel during upload aborts the request within 200ms",
+                "blocked_by": [], "assigned_role": "builder",
+            }
+        ]
+    }
+
+
+def test_decomposer_local_bucket_caps_tokens_and_disables_thinking() -> None:
+    """A local reasoning bucket must cap max_tokens and disable thinking via
+    extra_body — without this a thinking-model (Qwen3.6) runs away for minutes
+    instead of returning a DAG in ~10s."""
+    client = MagicMock()
+    client.chat.completions.create.return_value = _chat_response(_good_payload())
+
+    settings = _local_settings()
+    Decomposer(_fake_config(), client=client, settings=settings).decompose(_spec())
+
+    kwargs = client.chat.completions.create.call_args.kwargs
+    assert kwargs["max_tokens"] == settings.decompose_max_tokens
+    assert kwargs["extra_body"]["chat_template_kwargs"]["enable_thinking"] is False
+
+
+def test_decomposer_local_respects_thinking_knob() -> None:
+    """When local_disable_thinking is False, no extra_body is sent even for a
+    local bucket (the cap still applies)."""
+    client = MagicMock()
+    client.chat.completions.create.return_value = _chat_response(_good_payload())
+
+    settings = HarnessSettings(
+        orchestrator=BucketConfig(provider="local", model="mlx-x"),
+        builder=BucketConfig(provider="local", model="mlx-x"),
+        local_base_url="http://localhost:8080/v1",
+        local_disable_thinking=False,
+    )
+    Decomposer(_fake_config(), client=client, settings=settings).decompose(_spec())
+
+    kwargs = client.chat.completions.create.call_args.kwargs
+    assert kwargs["max_tokens"] == settings.decompose_max_tokens
+    assert "extra_body" not in kwargs
+
+
+def test_decomposer_api_bucket_sends_no_thinking_or_cap() -> None:
+    """An api (OpenAI) bucket must be unaffected: no extra_body, no max_tokens,
+    so OpenAI behavior is unchanged."""
+    client = MagicMock()
+    client.chat.completions.create.return_value = _chat_response(_good_payload())
+
+    Decomposer(_fake_config(), client=client, settings=_api_settings()).decompose(_spec())
+
+    kwargs = client.chat.completions.create.call_args.kwargs
+    assert "extra_body" not in kwargs
+    assert "max_tokens" not in kwargs

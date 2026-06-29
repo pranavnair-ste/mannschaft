@@ -48,11 +48,19 @@ class BucketConfig:
             )
 
 
+DEFAULT_DECOMPOSE_MAX_TOKENS = 2048
+
+
 @dataclass(frozen=True)
 class HarnessSettings:
     orchestrator: BucketConfig
     builder: BucketConfig
     local_base_url: str = DEFAULT_LOCAL_BASE_URL
+    # Structured-output (decompose) calls against a thinking-capable LOCAL model
+    # (e.g. Qwen3.6) must cap tokens and disable thinking, or they run away for
+    # minutes instead of returning a DAG in ~10s. Untouched for the `api` bucket.
+    decompose_max_tokens: int = DEFAULT_DECOMPOSE_MAX_TOKENS
+    local_disable_thinking: bool = True
 
 
 def _home_dir() -> Path:
@@ -95,10 +103,19 @@ def load_settings() -> HarnessSettings:
         return defaults
     if not isinstance(raw, dict):
         return defaults
+    try:
+        max_tokens = int(raw.get("decompose_max_tokens", defaults.decompose_max_tokens))
+    except (TypeError, ValueError):
+        max_tokens = defaults.decompose_max_tokens
+    disable_thinking = raw.get("local_disable_thinking", defaults.local_disable_thinking)
+    if not isinstance(disable_thinking, bool):
+        disable_thinking = defaults.local_disable_thinking
     return HarnessSettings(
         orchestrator=_bucket_from_dict(raw.get("orchestrator"), defaults.orchestrator),
         builder=_bucket_from_dict(raw.get("builder"), defaults.builder),
         local_base_url=str(raw.get("local_base_url", defaults.local_base_url)),
+        decompose_max_tokens=max_tokens,
+        local_disable_thinking=disable_thinking,
     )
 
 
@@ -109,5 +126,7 @@ def save_settings(settings: HarnessSettings) -> None:
         "orchestrator": {"provider": settings.orchestrator.provider, "model": settings.orchestrator.model},
         "builder": {"provider": settings.builder.provider, "model": settings.builder.model},
         "local_base_url": settings.local_base_url,
+        "decompose_max_tokens": settings.decompose_max_tokens,
+        "local_disable_thinking": settings.local_disable_thinking,
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
