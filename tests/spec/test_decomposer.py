@@ -183,6 +183,65 @@ def test_decomposer_retries_on_dangling_blocked_by_then_succeeds() -> None:
     assert "t-implement" in second[-1]["content"]
 
 
+def test_decomposition_result_rejects_duplicate_ids() -> None:
+    """Two tasks with the same id is invalid — Coordinator._prepare_explicit_tasks
+    rejects duplicates at launch (observed live on Qwen3.6)."""
+    with pytest.raises(ValidationError, match="duplicate task ids"):
+        DecompositionResult(
+            tasks=[
+                DecomposedTask(id="t-a", name="n", description="d",
+                               acceptance_criterion="x", blocked_by=[], assigned_role="builder"),
+                DecomposedTask(id="t-a", name="n2", description="d2",
+                               acceptance_criterion="y", blocked_by=[], assigned_role="builder"),
+            ]
+        )
+
+
+def test_decomposition_result_rejects_cycle() -> None:
+    """A dependency cycle is invalid — the Coordinator toposort requires a DAG."""
+    with pytest.raises(ValidationError, match="cycle"):
+        DecompositionResult(
+            tasks=[
+                DecomposedTask(id="t-a", name="n", description="d",
+                               acceptance_criterion="x", blocked_by=["t-b"], assigned_role="builder"),
+                DecomposedTask(id="t-b", name="n", description="d",
+                               acceptance_criterion="y", blocked_by=["t-a"], assigned_role="builder"),
+            ]
+        )
+
+
+def test_decomposer_retries_on_duplicate_ids_then_succeeds() -> None:
+    """The model emits a duplicate task id; the retry loop must feed the
+    duplicate-id error back and accept the corrected DAG."""
+    bad = {
+        "tasks": [
+            {"id": "t-get", "name": "n", "description": "d",
+             "acceptance_criterion": "Clicking Cancel during upload aborts the request within 200ms",
+             "blocked_by": [], "assigned_role": "builder"},
+            {"id": "t-get", "name": "n2", "description": "d2",
+             "acceptance_criterion": "Cancelled upload leaves no partial file on the server",
+             "blocked_by": [], "assigned_role": "builder"},
+        ]
+    }
+    good = {
+        "tasks": [
+            {"id": "t-get", "name": "n", "description": "d",
+             "acceptance_criterion": "Clicking Cancel during upload aborts the request within 200ms",
+             "blocked_by": [], "assigned_role": "builder"},
+            {"id": "t-cleanup", "name": "n2", "description": "d2",
+             "acceptance_criterion": "Cancelled upload leaves no partial file on the server",
+             "blocked_by": [], "assigned_role": "builder"},
+        ]
+    }
+    client = MagicMock()
+    client.chat.completions.create.side_effect = [_chat_response(bad), _chat_response(good)]
+    tasks = Decomposer(_fake_config(), client=client, settings=_api_settings()).decompose(_spec())
+    assert client.chat.completions.create.call_count == 2
+    assert sorted(t.id for t in tasks) == ["t-cleanup", "t-get"]
+    second = client.chat.completions.create.call_args_list[1].kwargs["messages"]
+    assert "unique" in second[-1]["content"].lower()
+
+
 def test_decomposer_init_loads_prompt() -> None:
     d = Decomposer(_fake_config(), client=MagicMock(), settings=_api_settings())
     assert "decomposition assistant" in d.prompt.lower()

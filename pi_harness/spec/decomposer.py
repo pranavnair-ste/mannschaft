@@ -33,23 +33,52 @@ class DecompositionResult(BaseModel):
     tasks: list[DecomposedTask]
 
     @model_validator(mode="after")
-    def _blocked_by_refs_resolve(self) -> "DecompositionResult":
-        """Every blocked_by id must match a task id in the same response.
+    def _dag_is_launchable(self) -> "DecompositionResult":
+        """Reject any task DAG the Coordinator would refuse at launch.
 
-        Thinking-capable local models (observed live on Qwen3.6-35B-A3B) invent
-        near-miss dependency ids (e.g. ``t-get-todos`` for a task actually named
-        ``t-get-todos-endpoint``). The pydantic shape check alone does not catch
-        this, so a dangling edge would only surface as a Coordinator toposort
-        failure at launch. Rejecting it here feeds the dangling-ref error into
-        the decompose retry loop so the model self-corrects before launch.
+        Thinking-capable local models (observed live on Qwen3.6-35B-A3B) emit
+        structurally-valid-but-unlaunchable DAGs: duplicate task ids, near-miss
+        invented ``blocked_by`` ids (``t-get-todos`` for ``t-get-todos-endpoint``),
+        or dependency cycles. The pydantic shape check alone misses all three, so
+        they would only surface as a Coordinator ``_prepare_explicit_tasks`` /
+        toposort failure at launch. Rejecting them here feeds the specific error
+        into the decompose retry loop so the model self-corrects before launch.
         """
-        ids = {t.id for t in self.tasks}
-        dangling = sorted({b for t in self.tasks for b in t.blocked_by if b not in ids})
+        # 1. Unique ids — Coordinator._prepare_explicit_tasks rejects duplicates.
+        seen: set[str] = set()
+        dupes = sorted({t.id for t in self.tasks if t.id in seen or seen.add(t.id)})
+        if dupes:
+            raise ValueError(
+                f"duplicate task ids: {', '.join(dupes)}. Every task id MUST be unique."
+            )
+        # 2. blocked_by ids must resolve to a task in this response.
+        dangling = sorted({b for t in self.tasks for b in t.blocked_by if b not in seen})
         if dangling:
             raise ValueError(
                 "blocked_by references unknown task ids: "
                 f"{', '.join(dangling)}. Every id in a blocked_by list MUST "
                 "exactly match the id of another task in this response."
+            )
+        # 3. No cycles — Coordinator toposort requires a DAG (Kahn's algorithm).
+        indeg = {t.id: 0 for t in self.tasks}
+        adj: dict[str, list[str]] = {t.id: [] for t in self.tasks}
+        for t in self.tasks:
+            for b in t.blocked_by:
+                adj[b].append(t.id)
+                indeg[t.id] += 1
+        queue = [i for i, d in indeg.items() if d == 0]
+        visited = 0
+        while queue:
+            node = queue.pop()
+            visited += 1
+            for m in adj[node]:
+                indeg[m] -= 1
+                if indeg[m] == 0:
+                    queue.append(m)
+        if visited != len(self.tasks):
+            raise ValueError(
+                "blocked_by forms a dependency cycle. Task dependencies MUST form "
+                "a DAG (no cycles)."
             )
         return self
 
@@ -109,8 +138,9 @@ def _repair_message(err: Exception) -> str:
         "Return the COMPLETE corrected JSON object now. Every task object MUST "
         "include all six keys: id, name, description, acceptance_criterion, "
         "blocked_by, assigned_role. Never omit name or acceptance_criterion. "
-        "Every id in a blocked_by list MUST exactly match the id of another task "
-        "in the response — do not invent dependency ids. "
+        "Task ids MUST be unique. Every id in a blocked_by list MUST exactly "
+        "match the id of another task in the response — do not invent dependency "
+        "ids — and dependencies MUST NOT form a cycle. "
         "Output only the JSON object — no prose, no markdown fences."
     )
 
