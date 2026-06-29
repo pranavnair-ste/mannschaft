@@ -28,6 +28,8 @@ class RunSummaryDTO(BaseModel):
     branch_from_step: str | None = None
     goal: str | None = None
     spec_id: str | None = None
+    wall_clock_s: float | None = None
+    sovereign: bool = False
 
 
 class TrajectoryEventDTO(BaseModel):

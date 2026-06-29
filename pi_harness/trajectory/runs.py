@@ -54,6 +54,16 @@ class RunSummary:
     branch_from_step: str | None
     goal: str | None
     spec_id: str | None
+    # Total wall-clock seconds for the run (ended_at - started_at). The doc's
+    # mandated "standard measure"; None while the run is still going (no
+    # ended_at) or if either timestamp is missing.
+    wall_clock_s: float | None = None
+    # True iff every model bucket the run used was provider 'local' (recorded
+    # in run_spec_json at launch). Lets the dashboard show "Local · sovereign ·
+    # $0 external" instead of a misleading $0.000 for fully-local runs. Defaults
+    # to False when no provider evidence is stored (legacy rows) — we never
+    # falsely claim sovereignty.
+    sovereign: bool = False
 
 
 # Paths whose ``runs`` table has been initialized in THIS process. Read paths
@@ -186,6 +196,31 @@ def get_run(run_id: str, *, db_path: Path | str | None = None) -> dict[str, Any]
     return _row_to_dict(row) if row else None
 
 
+def _wall_clock_seconds(started_at: str | None, ended_at: str | None) -> float | None:
+    """Total elapsed seconds (ended - started) parsed from ISO timestamps, or
+    None while the run is still going (no ended_at) / either stamp missing."""
+    if not started_at or not ended_at:
+        return None
+    return (
+        datetime.fromisoformat(ended_at) - datetime.fromisoformat(started_at)
+    ).total_seconds()
+
+
+def _sovereign_from_spec_json(run_spec_json: str | None) -> bool:
+    """True iff the stored RunSpec recorded model buckets and EVERY bucket used
+    provider 'local'. Returns False when no buckets were recorded (legacy/empty
+    spec) — without provider evidence we never claim a run was sovereign."""
+    if not run_spec_json:
+        return False
+    try:
+        buckets = json.loads(run_spec_json).get("buckets")
+    except (json.JSONDecodeError, AttributeError):
+        return False
+    if not isinstance(buckets, dict) or not buckets:
+        return False
+    return all(provider == "local" for provider in buckets.values())
+
+
 def _summarize_run(conn: sqlite3.Connection, r: sqlite3.Row) -> RunSummary:
     """Build a RunSummary for one run row, aggregating its event stats + cost."""
     agg = conn.execute(
@@ -216,6 +251,8 @@ def _summarize_run(conn: sqlite3.Connection, r: sqlite3.Row) -> RunSummary:
         branch_from_step=r["branch_from_step"],
         goal=r["goal"],
         spec_id=r["spec_id"],
+        wall_clock_s=_wall_clock_seconds(r["started_at"], r["ended_at"]),
+        sovereign=_sovereign_from_spec_json(r["run_spec_json"]),
     )
 
 

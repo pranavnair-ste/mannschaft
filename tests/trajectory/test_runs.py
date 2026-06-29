@@ -187,6 +187,40 @@ def test_run_summary_is_dataclass():
         started_at=None, ended_at=None, agent_count=0,
         total_tokens_in=0, total_tokens_out=0, total_cost_usd=0.0,
         event_count=0, parent_run_id=None, branch_from_step=None,
-        goal=None, spec_id=None,
+        goal=None, spec_id=None, wall_clock_s=None, sovereign=False,
     )
     assert s.run_id == "r"
+
+
+def test_wall_clock_seconds_computed_from_timestamps(db: Path):
+    """A finished run reports total wall-clock seconds = ended_at - started_at."""
+    from pi_harness.trajectory.runs import get_run_summary
+
+    started = datetime(2026, 5, 28, 10, 0, 0, tzinfo=timezone.utc)
+    register_run(
+        run_id="wc-done", spec_id=None, topology="sequential", sync_mode="per_agent",
+        session_id=None, goal="g", team_name="t", started_at=started,
+        run_spec_json="{}", db_path=db,
+    )
+    # 12.5s later (12 seconds + 500_000 microseconds)
+    ended = datetime(2026, 5, 28, 10, 0, 12, 500_000, tzinfo=timezone.utc)
+    mark_run_status("wc-done", "succeeded", ended_at=ended, db_path=db)
+
+    s = get_run_summary("wc-done", db_path=db)
+    assert s is not None
+    assert s.wall_clock_s == pytest.approx(12.5)
+
+
+def test_wall_clock_none_while_running(db: Path):
+    """A run with no ended_at (still running) reports wall_clock_s == None."""
+    from pi_harness.trajectory.runs import get_run_summary
+
+    register_run(
+        run_id="wc-running", spec_id=None, topology="sequential", sync_mode="per_agent",
+        session_id=None, goal="g", team_name="t",
+        started_at=datetime(2026, 5, 28, 10, 0, 0, tzinfo=timezone.utc),
+        run_spec_json="{}", status="running", db_path=db,
+    )
+    s = get_run_summary("wc-running", db_path=db)
+    assert s is not None
+    assert s.wall_clock_s is None
