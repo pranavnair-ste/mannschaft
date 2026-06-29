@@ -75,6 +75,7 @@ def _build_argv(
     *,
     provider: str | None = None,
     model: str | None = None,
+    disable_thinking: bool = False,
 ) -> list[str]:
     if executor == "pi":
         # Flags verified against pi 0.73.1 (see CAPTURE_FORMAT.md).
@@ -92,6 +93,13 @@ def _build_argv(
             argv.extend(["--provider", provider])
         if model is not None:
             argv.extend(["--model", model])
+        if disable_thinking:
+            # Local Qwen thinking models default to thinking ON at the server,
+            # which makes every agent turn slow + verbose. `--thinking off` maps
+            # (via the qwen-chat-template compat we stamp into pi's registry) to
+            # chat_template_kwargs.enable_thinking=false. Gated on the harness
+            # setting local_disable_thinking (default True) for local buckets.
+            argv.extend(["--thinking", "off"])
         # pi 0.73.1 has NO end-of-options ("--") support: passing it crashes
         # with `Error: Unknown option: --` (verified 2026-06-06). The prompt is
         # appended as positional `[messages...]`, preserving pi's @file and
@@ -169,8 +177,14 @@ def run(
     """
     provider: str | None = None
     model: str | None = None
+    disable_thinking = False
     if bucket is not None and executor == "pi":
         provider, model = _resolve_provider_model(bucket)
+        # Disable thinking for a LOCAL bucket by default (harness setting), so a
+        # local thinking model (Qwen3.6) doesn't burn a slow reasoning trace on
+        # every agent turn. The api/cloud path is untouched.
+        if provider == LOCAL_PROVIDER_NAME and load_settings().local_disable_thinking:
+            disable_thinking = True
     elif bucket is not None:
         # provider/model routing is only wired for pi; warn so the operator
         # knows their model selection is NOT applied (audit #28).
@@ -179,7 +193,10 @@ def run(
             "only wired for pi, so the agent uses %s's own defaults.",
             bucket, executor, executor,
         )
-    argv = _build_argv(executor, prompt_args, provider=provider, model=model)
+    argv = _build_argv(
+        executor, prompt_args, provider=provider, model=model,
+        disable_thinking=disable_thinking,
+    )
     proc = subprocess.Popen(
         argv,
         stdin=subprocess.DEVNULL,  # critical: pi hangs without this

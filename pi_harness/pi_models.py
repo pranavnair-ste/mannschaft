@@ -13,8 +13,22 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Iterable
+
+# Qwen thinking models (e.g. Qwen3.6) default to thinking ON at the server.
+# pi only sends the disabling param (`chat_template_kwargs.enable_thinking`)
+# when the model entry declares `reasoning` + the qwen chat-template compat; we
+# stamp those on managed Qwen entries so `pi --thinking off` actually works.
+_QWEN_RE = re.compile(r"qwen", re.IGNORECASE)
+
+
+def _thinking_fields(model_id: str) -> dict:
+    """Thinking-control fields for a model id, or {} if not a Qwen model."""
+    if _QWEN_RE.search(model_id or ""):
+        return {"reasoning": True, "compat": {"thinkingFormat": "qwen-chat-template"}}
+    return {}
 
 __all__ = [
     "DEFAULT_PI_MODELS_PATH",
@@ -45,7 +59,7 @@ def _load(path: Path) -> dict:
 
 
 def _new_model_entry(model_id: str) -> dict:
-    return {
+    entry = {
         "id": model_id,
         "name": model_id,
         "contextWindow": 32768,
@@ -53,6 +67,8 @@ def _new_model_entry(model_id: str) -> dict:
         "input": ["text"],
         "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
     }
+    entry.update(_thinking_fields(model_id))
+    return entry
 
 
 def ensure_pi_provider(
@@ -90,6 +106,12 @@ def ensure_pi_provider(
         if model_id not in existing_ids:
             existing_models.append(_new_model_entry(model_id))
             existing_ids.add(model_id)
+    # Stamp thinking-control fields on every managed entry (incl. ones written
+    # before this existed) so `pi --thinking off` disables Qwen reasoning. This
+    # is the harness-owned provider, so setting these is safe.
+    for m in existing_models:
+        if isinstance(m, dict):
+            m.update(_thinking_fields(m.get("id", "")))
     provider["models"] = existing_models
 
     data["providers"][name] = provider

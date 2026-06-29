@@ -154,3 +154,52 @@ def test_ensure_local_provider_from_settings_noop_when_all_api(tmp_path: Path) -
     )
     assert ensure_local_provider_from_settings(settings, pi_models_path=models_path) is False
     assert not models_path.exists()
+
+
+def test_qwen_model_gets_thinking_control_fields(tmp_path: Path) -> None:
+    """A Qwen local model must be registered with reasoning + qwen-chat-template
+    compat, so `pi --thinking off` actually disables its reasoning trace
+    (chat_template_kwargs.enable_thinking=false)."""
+    from pi_harness.pi_models import ensure_pi_provider
+
+    path = tmp_path / "models.json"
+    ensure_pi_provider(
+        name="harness-local", base_url="http://localhost:8080/v1",
+        model_ids=["Qwen3.6-35B-A3B-MLX-4bit"], pi_models_path=path,
+    )
+    m = json.loads(path.read_text())["providers"]["harness-local"]["models"][0]
+    assert m["reasoning"] is True
+    assert m["compat"]["thinkingFormat"] == "qwen-chat-template"
+
+
+def test_non_qwen_model_has_no_thinking_fields(tmp_path: Path) -> None:
+    from pi_harness.pi_models import ensure_pi_provider
+
+    path = tmp_path / "models.json"
+    ensure_pi_provider(
+        name="harness-local", base_url="http://localhost:8080/v1",
+        model_ids=["gemma-4-26B-A4B-it-MLX-4bit"], pi_models_path=path,
+    )
+    m = json.loads(path.read_text())["providers"]["harness-local"]["models"][0]
+    assert "reasoning" not in m
+    assert "compat" not in m
+
+
+def test_existing_qwen_entry_gets_thinking_fields_stamped(tmp_path: Path) -> None:
+    """An entry written before thinking-control existed (no reasoning/compat)
+    must be stamped on the next upsert."""
+    from pi_harness.pi_models import ensure_pi_provider
+
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps({"providers": {"harness-local": {
+        "baseUrl": "http://localhost:8080/v1", "apiKey": "local",
+        "api": "openai-completions",
+        "models": [{"id": "Qwen3.6-35B-A3B-MLX-4bit", "name": "x"}],
+    }}}))
+    ensure_pi_provider(
+        name="harness-local", base_url="http://localhost:8080/v1",
+        model_ids=["Qwen3.6-35B-A3B-MLX-4bit"], pi_models_path=path,
+    )
+    m = json.loads(path.read_text())["providers"]["harness-local"]["models"][0]
+    assert m["reasoning"] is True
+    assert m["compat"]["thinkingFormat"] == "qwen-chat-template"

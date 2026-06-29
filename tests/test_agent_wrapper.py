@@ -79,6 +79,55 @@ def test_build_argv_pi_omits_provider_when_none():
     assert "--model" not in argv
 
 
+def test_build_argv_pi_disable_thinking_adds_flag():
+    argv = _build_argv("pi", ["p"], provider="harness-local",
+                       model="Qwen3.6-35B-A3B-MLX-4bit", disable_thinking=True)
+    assert "--thinking" in argv
+    assert argv[argv.index("--thinking") + 1] == "off"
+    assert argv[-1] == "p"  # prompt still last
+
+
+def test_build_argv_pi_no_thinking_flag_by_default():
+    argv = _build_argv("pi", ["p"], provider="harness-local", model="Qwen3.6-35B-A3B-MLX-4bit")
+    assert "--thinking" not in argv
+
+
+def test_run_local_bucket_spawns_pi_with_thinking_off(tmp_path: Path, monkeypatch):
+    """A local bucket with local_disable_thinking=True (the default) must spawn
+    pi with `--thinking off`; the api/cloud path must not."""
+    import pi_harness.agent_wrapper as wrap
+    from pi_harness.settings import BucketConfig, HarnessSettings
+
+    monkeypatch.setattr(wrap, "load_settings", lambda: HarnessSettings(
+        orchestrator=BucketConfig(provider="api", model="gpt-5"),
+        builder=BucketConfig(provider="local", model="Qwen3.6-35B-A3B-MLX-4bit"),
+        local_disable_thinking=True,
+    ))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    captured = {}
+
+    class FakeProc:
+        def __init__(self, argv):
+            captured["argv"] = argv
+            self.stdout = io.StringIO("")
+        def kill(self): pass
+        def wait(self): return 0
+
+    monkeypatch.setattr(wrap.subprocess, "Popen", lambda argv, **k: FakeProc(argv))
+    monkeypatch.setattr(wrap, "consume_stream", lambda *a, **k: 0)
+
+    # fast bucket -> builder=local -> --thinking off
+    wrap.run(executor="pi", run_id="r", agent_id="a", db_path=tmp_path / "x.db",
+             prompt_args=["hi"], tee_stdout=False, bucket="fast")
+    assert "--thinking" in captured["argv"]
+    assert captured["argv"][captured["argv"].index("--thinking") + 1] == "off"
+
+    # reasoning bucket -> orchestrator=api -> no --thinking
+    wrap.run(executor="pi", run_id="r", agent_id="a", db_path=tmp_path / "x.db",
+             prompt_args=["hi"], tee_stdout=False, bucket="reasoning")
+    assert "--thinking" not in captured["argv"]
+
+
 def test_resolve_provider_model_api_bucket_resolves_openai(tmp_path, monkeypatch):
     """An explicitly-selected 'api' bucket resolves to (openai, <model>) when a
     key is present. (Robust to the local-default flip: uses explicit settings,
