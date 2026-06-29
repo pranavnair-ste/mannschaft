@@ -25,11 +25,22 @@ import secrets
 import subprocess
 from pathlib import Path
 
-__all__ = ["BootstrapError", "ensure_dashboard", "ensure_obs_token", "DASHBOARD_REPO_URL"]
+__all__ = [
+    "BootstrapError",
+    "ensure_dashboard",
+    "update_dashboard",
+    "ensure_obs_token",
+    "set_obs_enabled",
+    "DASHBOARD_REPO_URL",
+]
 
 logger = logging.getLogger(__name__)
 
 DASHBOARD_REPO_URL = "https://github.com/pranavnair-ste/pi-agent-observability"
+
+# Placeholder/dev tokens that must never be trusted as a real secret — treat any
+# of these as "no token set" and provision a strong one instead.
+_WEAK_TOKENS = {"", "devtoken", "dev", "changeme", "default", "token", "test"}
 
 # Relative to the dashboard checkout root — the Bun server entry. Its presence is
 # how we recognise a directory as a real dashboard checkout.
@@ -147,3 +158,98 @@ def _warn_on_ref_drift(fork_dir: Path, ref: str) -> None:
             head[:12],
             ref,
         )
+
+
+def update_dashboard(cfg) -> Path:
+    """Re-pin an existing dashboard checkout to ``cfg.obs_fork_ref`` (opt-in via
+    ``ms setup-obs --update``). This is the ONE path allowed to mutate git state.
+
+    Missing dir falls back to a fresh clone via :func:`ensure_dashboard`.
+
+    Raises:
+        BootstrapError: the dir exists but is not a dashboard checkout, or the
+            fetch/checkout failed.
+    """
+    fork_dir = Path(cfg.obs_fork_dir)
+    if not fork_dir.exists():
+        return ensure_dashboard(cfg)
+
+    entry = fork_dir / _SERVER_ENTRY
+    if not entry.exists():
+        raise BootstrapError(
+            f"{fork_dir} exists but is not an observability dashboard checkout "
+            f"(missing {_SERVER_ENTRY}); refusing to re-pin"
+        )
+    ref = cfg.obs_fork_ref
+    logger.info("re-pinning dashboard at %s to %s", fork_dir, ref)
+    _run(["git", "-C", str(fork_dir), "fetch", "--tags", "origin"])
+    _run(["git", "-C", str(fork_dir), "checkout", ref])
+    return fork_dir
+
+
+# --------------------------------------------------------------------------- #
+# Persistent OBS auth token + enable flag (D2)
+# --------------------------------------------------------------------------- #
+
+
+def _is_weak(token: str) -> bool:
+    return token.strip().lower() in _WEAK_TOKENS
+
+
+def _persist_keystore_kv(key: str, value: str) -> None:
+    """Write ``key=value`` into the keystore, preserving other lines and keeping
+    the file 0o600 (mirrors :func:`pi_harness.keystore.set_key`'s discipline).
+
+    The keystore is loaded by :func:`pi_harness.config.load_config` with
+    ``override=True``, so a value written here wins on the next load.
+    """
+    from dotenv import set_key as _dotenv_set_key
+
+    from pi_harness.keystore import keystore_path
+
+    path = keystore_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.touch()
+    os.chmod(path, 0o600)
+    # set_key may rewrite the file with umask perms — re-apply 0o600 after.
+    _dotenv_set_key(str(path), key, value)
+    os.chmod(path, 0o600)
+
+
+def ensure_obs_token(cfg) -> str:
+    """Return a persistent, non-weak ``OBS_AUTH_TOKEN``, provisioning one on first
+    use.
+
+    If ``cfg.obs_auth_token`` is already a non-weak value (it was loaded from the
+    env or the keystore) it is returned unchanged. Otherwise a strong
+    ``secrets.token_hex(16)`` token is generated, appended to the keystore with
+    ``0o600``, and returned. Idempotent: an existing keystore token is never
+    overwritten.
+    """
+    existing = (getattr(cfg, "obs_auth_token", "") or "").strip()
+    if existing and not _is_weak(existing):
+        return existing
+
+    # The cfg snapshot may predate a keystore write, or carry only a weak token;
+    # re-read the keystore directly so we never clobber a token persisted earlier.
+    from dotenv import dotenv_values
+
+    from pi_harness.keystore import keystore_path
+
+    path = keystore_path()
+    if path.exists():
+        stored = (dotenv_values(str(path)).get("OBS_AUTH_TOKEN") or "").strip()
+        if stored and not _is_weak(stored):
+            return stored
+
+    token = secrets.token_hex(16)
+    _persist_keystore_kv("OBS_AUTH_TOKEN", token)
+    logger.info("provisioned a new OBS_AUTH_TOKEN in %s", path)
+    return token
+
+
+def set_obs_enabled(enabled: bool) -> None:
+    """Persist ``PI_HARNESS_OBS_ENABLED`` to the keystore so subsequent
+    ``load_config()`` calls see observability as on (D2)."""
+    _persist_keystore_kv("PI_HARNESS_OBS_ENABLED", "1" if enabled else "0")

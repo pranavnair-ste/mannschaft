@@ -330,6 +330,47 @@ def up(
     raise typer.Exit(Supervisor(procs).run(ready_timeout=ready_timeout))
 
 
+@app.command(name="setup-obs")
+def setup_obs(
+    update: bool = typer.Option(
+        False, "--update",
+        help="Re-pin an existing dashboard checkout to the configured ref "
+        "(the only path that mutates the checkout's git state).",
+    ),
+) -> None:
+    """One-shot observability setup: clone+pin the dashboard, provision a
+    persistent auth token, and enable observability.
+
+    On a fresh machine this is all you need before `ms up`. The dashboard is
+    cloned to ~/.pi-harness/obs-dashboard (override with PI_HARNESS_OBS_FORK_DIR).
+    An existing checkout is left untouched unless --update is passed.
+    """
+    from pi_harness.config import load_config
+    from pi_harness.keystore import keystore_path
+    from pi_harness.observability import bootstrap
+
+    cfg = load_config()
+    try:
+        if update:
+            fork_dir = bootstrap.update_dashboard(cfg)
+        else:
+            fork_dir = bootstrap.ensure_dashboard(cfg)
+    except bootstrap.BootstrapError as exc:
+        typer.echo(f"error: dashboard setup failed: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"dashboard ready at {fork_dir}")
+
+    # Provision a persistent token (idempotent) and enable observability so the
+    # next `load_config()` (and `ms up`) sees it on. ensure_obs_token re-reads
+    # the keystore, so it is safe against this cfg snapshot being stale.
+    bootstrap.ensure_obs_token(cfg)
+    bootstrap.set_obs_enabled(True)
+
+    typer.echo(f"auth token provisioned + observability enabled in {keystore_path()}")
+    typer.echo("run `ms up` to boot the stack")
+
+
 @app.command()
 def doctor() -> None:
     """Preflight the observability stack: bun, the fork checkout, npm, the UI

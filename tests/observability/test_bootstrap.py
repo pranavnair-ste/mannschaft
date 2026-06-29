@@ -157,6 +157,70 @@ def test_existing_dir_missing_server_entry_raises(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
+# --------------------------------------------------------------------------- #
+# ensure_obs_token — persistent, idempotent, 0o600
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def ks(tmp_path, monkeypatch):
+    """Point the keystore at a temp file so tests never touch the real one."""
+    p = tmp_path / "keystore.env"
+    monkeypatch.setenv("PI_HARNESS_KEYSTORE_PATH", str(p))
+    return p
+
+
+def _token_cfg(token=""):
+    return type("C", (), {"obs_auth_token": token})()
+
+
+def test_ensure_obs_token_generates_and_persists_0o600(ks, monkeypatch):
+    from dotenv import dotenv_values
+
+    monkeypatch.delenv("OBS_AUTH_TOKEN", raising=False)
+    tok = bootstrap.ensure_obs_token(_token_cfg())
+    assert tok and len(tok) == 32  # secrets.token_hex(16)
+    assert dotenv_values(str(ks)).get("OBS_AUTH_TOKEN") == tok
+    assert oct(ks.stat().st_mode & 0o777) == "0o600"
+
+
+def test_ensure_obs_token_idempotent_preserves_existing(ks, monkeypatch):
+    from dotenv import dotenv_values
+
+    monkeypatch.delenv("OBS_AUTH_TOKEN", raising=False)
+    ks.write_text("OBS_AUTH_TOKEN=preexisting0123456789abcdef01234567\n")
+    tok = bootstrap.ensure_obs_token(_token_cfg())
+    assert tok == "preexisting0123456789abcdef01234567"
+    # Not rewritten/duplicated.
+    assert dotenv_values(str(ks)).get("OBS_AUTH_TOKEN") == tok
+
+
+def test_ensure_obs_token_returns_cfg_token_when_set(ks, monkeypatch):
+    """A non-weak token already on cfg (loaded from env/keystore) is reused,
+    not regenerated."""
+    monkeypatch.delenv("OBS_AUTH_TOKEN", raising=False)
+    tok = bootstrap.ensure_obs_token(_token_cfg(token="already-a-strong-token-xyz"))
+    assert tok == "already-a-strong-token-xyz"
+    # Nothing written when the token already exists.
+    assert not ks.exists()
+
+
+def test_ensure_obs_token_replaces_weak_token(ks, monkeypatch):
+    """A weak/dev placeholder token is treated as absent and replaced."""
+    monkeypatch.delenv("OBS_AUTH_TOKEN", raising=False)
+    tok = bootstrap.ensure_obs_token(_token_cfg(token="devtoken"))
+    assert tok != "devtoken"
+    assert len(tok) == 32
+
+
+def test_set_obs_enabled_persists_flag(ks):
+    from dotenv import dotenv_values
+
+    bootstrap.set_obs_enabled(True)
+    assert dotenv_values(str(ks)).get("PI_HARNESS_OBS_ENABLED") == "1"
+    assert oct(ks.stat().st_mode & 0o777) == "0o600"
+
+
 def test_bootstrap_error_carries_stderr(tmp_path, monkeypatch):
     def fake_run(cmd, **kw):
         if "clone" in cmd:
