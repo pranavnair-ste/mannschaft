@@ -34,6 +34,7 @@ def cfg(tmp_path: Path):
         obs_port=43190,
         obs_auth_token="",
         obs_fork_dir=tmp_path / "obs-fork",
+        obs_fork_ref="v0.3.0",
     )
 
 

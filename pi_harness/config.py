@@ -25,7 +25,8 @@ DEFAULT_FAST_MODEL = "gpt-5-mini"
 DEFAULT_CLAWTEAM_STATE_DIR = "~/.clawteam"
 DEFAULT_CORPUS_ROOT = "~/.pi-harness/corpus"
 DEFAULT_TRAJECTORY_DB_PATH = "~/.pi-harness/trajectory.db"
-DEFAULT_OBS_FORK_DIR = "~/Desktop/Personal/pi-agent-observability"
+DEFAULT_OBS_FORK_DIR = "~/.pi-harness/obs-dashboard"
+DEFAULT_OBS_FORK_REF = "v0.3.0"
 
 
 def _bool_env(value: str) -> bool:
@@ -50,7 +51,10 @@ class Config:
         obs_host: Host the fork observability server binds to.
         obs_port: Port the fork observability server binds to.
         obs_auth_token: Bearer token for the fork observability server (secret).
-        obs_fork_dir: Directory of the pi-agent observability fork checkout.
+        obs_fork_dir: Directory of the pi-agent observability dashboard checkout.
+        obs_fork_ref: Git ref (tag/branch/sha) the dashboard checkout is pinned
+            to. Used by ``ensure_dashboard`` to checkout on a fresh clone and to
+            warn on drift for an existing checkout.
     """
 
     openai_api_key: str = field(repr=False)  # never echo the secret in reprs/tracebacks/logs
@@ -64,6 +68,7 @@ class Config:
     obs_port: int
     obs_auth_token: str = field(repr=False)  # never echo the secret in reprs/tracebacks/logs
     obs_fork_dir: Path
+    obs_fork_ref: str
 
     @property
     def obs_server_url(self) -> str:
@@ -125,6 +130,7 @@ def load_config(env_file: Optional[str | Path] = ".env") -> Config:
             "(PI_HARNESS_OBS_ENABLED is set)"
         )
     obs_fork_dir = _expand(os.environ.get("PI_HARNESS_OBS_FORK_DIR", DEFAULT_OBS_FORK_DIR))
+    obs_fork_ref = os.environ.get("PI_HARNESS_OBS_FORK_REF", "").strip() or DEFAULT_OBS_FORK_REF
 
     return Config(
         openai_api_key=api_key,
@@ -148,4 +154,5 @@ def load_config(env_file: Optional[str | Path] = ".env") -> Config:
         obs_port=obs_port,
         obs_auth_token=obs_auth_token,
         obs_fork_dir=obs_fork_dir,
+        obs_fork_ref=obs_fork_ref,
     )

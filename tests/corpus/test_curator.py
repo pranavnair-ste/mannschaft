@@ -28,6 +28,7 @@ def _make_config(corpus_root: Path):
         obs_port=43190,
         obs_auth_token="",
         obs_fork_dir=corpus_root.parent / "obs-fork",
+        obs_fork_ref="v0.3.0",
     )
 
 

@@ -106,7 +106,7 @@ def main() -> None:
         clawteam_state_dir=tmp / "clawteam", corpus_root=corpus,
         trajectory_db_path=tmp / "traj.db",
         obs_enabled=False, obs_host="127.0.0.1", obs_port=43190,
-        obs_auth_token="", obs_fork_dir=tmp / "obs-fork",
+        obs_auth_token="", obs_fork_dir=tmp / "obs-fork", obs_fork_ref="v0.3.0",
     )
     _seed(config)
     app = create_app(config, DashboardConfig())

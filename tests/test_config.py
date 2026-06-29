@@ -142,6 +142,28 @@ def test_obs_defaults_disabled(monkeypatch):
     assert cfg.obs_server_url == "http://127.0.0.1:43190"
 
 
+def test_obs_fork_dir_default_is_app_owned(monkeypatch):
+    """Default dashboard dir is the portable, app-owned ~/.pi-harness/obs-dashboard
+    (D4) — not the author's ~/Desktop clone."""
+    from pi_harness.config import load_config
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("PI_HARNESS_OBS_FORK_DIR", raising=False)
+    cfg = load_config(env_file=None)
+    home = Path(os.path.expanduser("~"))
+    assert cfg.obs_fork_dir == (home / ".pi-harness" / "obs-dashboard").resolve(strict=False)
+
+
+def test_obs_fork_ref_default_and_override(monkeypatch):
+    from pi_harness.config import load_config
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("PI_HARNESS_OBS_FORK_REF", raising=False)
+    assert load_config(env_file=None).obs_fork_ref == "v0.3.0"
+    monkeypatch.setenv("PI_HARNESS_OBS_FORK_REF", "main")
+    assert load_config(env_file=None).obs_fork_ref == "main"
+
+
 def test_obs_server_url_composed_and_overridable(monkeypatch):
     from pi_harness.config import load_config
 
