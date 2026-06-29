@@ -42,15 +42,30 @@ class Supervisor:
             )
             self._children.append((p, child))
 
-    def wait_ready(self, *, timeout: float = 30.0, interval: float = 0.5) -> None:
+    def wait_ready(
+        self, *, timeout: float = 30.0, interval: float = 0.5
+    ) -> dict[str, bool]:
+        """Poll each health-checked proc until ready or the timeout elapses.
+
+        Returns a per-proc readiness report ``{name -> bool}`` covering only the
+        procs that declare a ``health_url`` (procs without one are not probed and
+        are absent from the report). The caller surfaces not-ready procs.
+        """
         deadline = time.monotonic() + timeout
+        report: dict[str, bool] = {}
         for p, _ in self._children:
             if not p.health_url:
                 continue
-            while time.monotonic() < deadline:
+            ready = False
+            while True:
                 if self._probe(p.health_url):
+                    ready = True
+                    break
+                if time.monotonic() >= deadline:
                     break
                 self._sleep(interval)
+            report[p.name] = ready
+        return report
 
     @staticmethod
     def _probe(url: str) -> bool:
@@ -84,7 +99,21 @@ class Supervisor:
                 except Exception:
                     pass
 
-    def run(self, *, ready_timeout: float = 30.0, poll_interval: float = 1.0) -> int:
+    def run(
+        self,
+        *,
+        ready_timeout: float = 30.0,
+        poll_interval: float = 1.0,
+        strict: bool = False,
+        on_ready=None,
+    ) -> int:
+        """Spawn, wait for readiness, then watch until a child exits or signal.
+
+        ``on_ready`` (if given) is called once with the per-proc readiness report
+        so the caller can surface which procs came up. When ``strict`` is True and
+        any health-checked proc is not ready, return non-zero immediately (after
+        tearing down) instead of tailing.
+        """
         atexit.register(self.teardown)
 
         def _handler(signum, frame):
@@ -95,7 +124,11 @@ class Supervisor:
         signal.signal(signal.SIGTERM, _handler)
         self.start()
         try:
-            self.wait_ready(timeout=ready_timeout)
+            report = self.wait_ready(timeout=ready_timeout)
+            if on_ready is not None:
+                on_ready(report)
+            if strict and not all(report.values()):
+                return 2
             while True:
                 dead = self.poll_once()
                 if dead is not None:

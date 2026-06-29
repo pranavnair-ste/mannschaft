@@ -61,3 +61,23 @@ def test_poll_detects_dead_child(monkeypatch):
     s.start()
     s.poll_once()  # first poll alive
     assert s.poll_once() is not None  # second poll dead
+
+
+def test_wait_ready_returns_per_proc_report(monkeypatch):
+    """Each health-checked proc gets a True/False; unchecked procs are absent."""
+    monkeypatch.setattr(sup.subprocess, "Popen", lambda argv, **k: FakeProc())
+    # 'up' probes True; 'down' never answers; 'noprobe' has no health_url.
+    monkeypatch.setattr(
+        sup.Supervisor, "_probe",
+        staticmethod(lambda url: url.endswith("/up")),
+    )
+    procs = [
+        sup.Proc("up", ["x"], health_url="http://h/up"),
+        sup.Proc("down", ["y"], health_url="http://h/down"),
+        sup.Proc("noprobe", ["z"]),
+    ]
+    s = sup.Supervisor(procs, sleep=lambda *_: None)
+    s.start()
+    report = s.wait_ready(timeout=0.01, interval=0.0)
+    assert report == {"up": True, "down": False}
+    assert "noprobe" not in report

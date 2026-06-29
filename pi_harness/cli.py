@@ -55,6 +55,12 @@ def _root(
 # --------------------------------------------------------------------------- #
 
 
+def repo_root() -> Path:
+    """The mannschaft checkout root, anchored on the package location so `ms up`
+    / `ms doctor` work from any cwd (the UI lives at ``<root>/ui``)."""
+    return Path(__file__).resolve().parents[1]
+
+
 def _load_spec_or_die(spec_path: Path):
     if not spec_path.exists():
         typer.echo(f"error: spec file not found: {spec_path}", err=True)
@@ -265,6 +271,11 @@ def up(
     ready_timeout: float = typer.Option(
         30.0, "--ready-timeout", help="Seconds to wait for health checks before tailing."
     ),
+    strict: bool = typer.Option(
+        False, "--strict",
+        help="Exit non-zero if any health-checked process isn't ready in time "
+        "(default: keep running so the bridge can wait for a slow dashboard).",
+    ),
 ) -> None:
     """Boot the full observability stack: the fork's Bun server, the live bridge
     tailer, the FastAPI dashboard, and (unless --no-ui) the Next.js UI.
@@ -310,11 +321,31 @@ def up(
             Proc(
                 "ui",
                 ["npm", "run", "dev"],
-                cwd=Path("ui"),
+                cwd=repo_root() / "ui",
                 env=dict(os.environ),
                 health_url="http://127.0.0.1:3000",
             )
         )
+
+    # One-line, actionable hint per health-checked proc that doesn't come up.
+    hints = {
+        "fork": (
+            f"didn't answer on {cfg.obs_server_url} within {{t:g}}s — "
+            "check `bun` is installed and OBS_AUTH_TOKEN is set "
+            "(run `ms setup-obs`)"
+        ),
+        "api": "didn't answer on :8800 within {t:g}s — check the FastAPI logs above",
+        "ui": "didn't answer on :3000 within {t:g}s — check `npm install` ran in ui/",
+    }
+
+    def _report_readiness(report: dict[str, bool]) -> None:
+        up = [n for n, ok in report.items() if ok]
+        down = [n for n, ok in report.items() if not ok]
+        if up:
+            typer.echo("ready: " + ", ".join(up))
+        for name in down:
+            hint = hints.get(name, "didn't become ready in time")
+            typer.echo(f"NOT READY: {name} — {hint.format(t=ready_timeout)}", err=True)
 
     base = cfg.obs_server_url.rstrip("/")
     frag = "#view=race&pool=<run_id>&hide_after=never&show_hidden=1"
@@ -327,7 +358,13 @@ def up(
     typer.echo(f"run deep-link template: {link}")
     typer.echo("starting processes: " + ", ".join(p.name for p in procs))
 
-    raise typer.Exit(Supervisor(procs).run(ready_timeout=ready_timeout))
+    raise typer.Exit(
+        Supervisor(procs).run(
+            ready_timeout=ready_timeout,
+            strict=strict,
+            on_ready=_report_readiness,
+        )
+    )
 
 
 @app.command(name="setup-obs")
@@ -403,13 +440,20 @@ def doctor() -> None:
 
     typer.echo("observability preflight:")
 
+    from pi_harness.observability.bootstrap import DASHBOARD_REPO_URL
+
     check("bun on PATH", shutil.which("bun") is not None)
     entry = cfg.obs_fork_dir / "apps" / "observability" / "server.ts"
-    check(f"fork checkout at {cfg.obs_fork_dir}", cfg.obs_fork_dir.exists())
-    check(f"fork server entry {entry}", entry.exists())
+    dash_present = cfg.obs_fork_dir.exists()
+    check(f"dashboard checkout at {cfg.obs_fork_dir}", dash_present)
+    if not dash_present:
+        typer.echo(
+            f"      → run `ms setup-obs` to clone {DASHBOARD_REPO_URL} and pin it"
+        )
+    check(f"dashboard server entry {entry}", entry.exists())
 
     check("npm on PATH", shutil.which("npm") is not None)
-    check("ui/node_modules present", (Path("ui") / "node_modules").exists())
+    check("ui/node_modules present", (repo_root() / "ui" / "node_modules").exists())
 
     check(f"port 8800 free (api)", port_free(8800))
     check(f"port 3000 free (ui)", port_free(3000))
