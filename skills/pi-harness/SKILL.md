@@ -1,40 +1,57 @@
 ---
 name: pi-harness
-description: Launch a Pi-Agent Harness run from a spec file. Use when the user types `/pi-harness <spec-id-or-path>` to kick off a multi-agent build via the pi-harness CLI; this skill shells out to `pi-harness launch` via Bash and surfaces the output so the user can watch the run.
+description: >
+  Use when work is large enough to benefit from a parallel agentic team — the
+  user asks to "build/implement X with a team", "spin up agents", "run the
+  harness", or the current task clearly exceeds efficient solo work. Dispatches
+  the mannschaft team pipeline IN THE BACKGROUND via `ms launch --detach`, after
+  confirming with the user, and surfaces live observability in the chat. Never
+  shells out to raw clawteam.
+version: 1.0.0
 ---
 
-# pi-harness
+# pi-harness — dispatch an agentic team (background + observable)
 
-**Use when:** The user invokes `/pi-harness <arg>` where `<arg>` is either
-- A spec file path (`/path/to/spec.md`), or
-- A spec ID (resolved to `~/.pi-harness/specs/<id>.md`).
+You are the sovereign session. This skill lets you summon the mannschaft
+multi-agent pipeline as a power tool. The team runs in the background so the
+chat stays live and you can report progress.
 
-## What to do
+## When to use
+- The user explicitly asks for a team / the harness, OR
+- You judge the work is team-sized (multi-file feature, parallelizable scope).
 
-1. **Resolve the spec path.** If the argument is an absolute or relative path that exists, use it. Otherwise treat it as a spec_id and resolve to `~/.pi-harness/specs/<id>.md`. Verify the file exists with `ls -la <path>` via Bash before launching; if it doesn't, ask the user to clarify or offer to scaffold one with `pi-harness spec new <id> --title "..."`.
+## Protocol
 
-2. **Lint first.** Run `pi-harness lint <path>` via Bash. If the exit code is non-zero, surface the output and STOP — offer to help fix the violations rather than launching a flawed spec.
+1. **Have a spec.** If the user has a spec file or `~/.pi-harness/specs/<id>.md`,
+   use it. If not, use the `shape-spec` skill first to build one interactively.
 
-3. **Launch.** If lint passes, run `pi-harness launch <path>` via Bash. The CLI prints the run_id and (unless `--detach`) waits for completion, printing terminal task statuses. The skill's job is to start it and pass the output through.
+2. **CONFIRM before dispatching.** Always ask, e.g.: "This is team-sized — spin
+   up an agentic team to build it in the background? [y/n]". Do not launch
+   without a yes.
 
-4. **Don't add flags the user didn't ask for.** No `--detach`, no `--allow-warnings`. If the user wants a persistent session, pass `--session <id>`. If they explicitly ask for any flag, pass it through.
+3. **Pick models.** Unless the user says "use my defaults", run the
+   `choose-team-models` skill so they can set orchestrator/builder per dispatch
+   (recommend API reasoning + local builder for reliable decomposition).
 
-5. **On non-zero exit,** report the run_id (if printed) and the tail of the output so the user can inspect the trajectory store or branch from a partial run.
+4. **Launch in the background** with Bash:
+   `ms launch <spec-path> --detach`
+   Capture the printed `run_id` (and the `isolated on branch:` line if shown).
 
-## What NOT to do
+5. **Surface observability.** Tell the user the run_id and the fork dashboard
+   deep-link `<dashboard>/runs/<run_id>`. If the dashboard isn't running, tell
+   them to start it: `ms up`. Say they can ask "status" anytime.
 
-- Don't try to fix a failing spec by editing it yourself; ask the user.
-- Don't run `pi-harness decompose` first — `pi-harness launch` already does that, and running it twice burns OpenAI credit.
-- Don't run `pi-harness spec new` without the user asking; that's a separate intent.
-- Don't shell out to `clawteam` directly — the whole point of this CLI is that the orchestration is hidden behind one command.
+6. **Report progress on demand / on a cadence** with Bash:
+   `ms status <run_id> --json`
+   Summarize it in plain language (tasks done, current agent activity, tokens,
+   cost, elapsed). Keep working with the user in the meantime.
 
-## Installation
+7. **On completion** (`ms status` shows a terminal state): report success/failure
+   and the run branch; offer to diff/review/merge. On failure, surface the
+   branch for inspection; `ms stop <run_id>` cleans up a stuck run.
 
-To register this skill with Claude Code, symlink the directory into your plugins cache:
-
-```bash
-mkdir -p ~/.claude/plugins/local
-ln -sfn /Users/pranavnair/Desktop/Personal/mannschaft/skills/pi-harness ~/.claude/plugins/local/pi-harness
-```
-
-Then restart Claude Code; `/pi-harness <arg>` appears in the slash-command menu.
+## Do NOT
+- Do not launch without explicit confirmation.
+- Do not block the session waiting for the team (always `--detach`).
+- Do not shell out to `clawteam` directly — `ms launch` is the only path.
+- Do not re-run `ms decompose` before `ms launch` (launch decomposes once).

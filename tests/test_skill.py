@@ -25,4 +25,6 @@ def test_skill_has_frontmatter():
 def test_skill_body_mentions_bash_invocation():
     text = SKILL_PATH.read_text(encoding="utf-8")
     assert "Bash" in text or "bash" in text
-    assert "pi-harness launch" in text
+    # The dispatch skill now routes through the mannschaft pipeline (`ms launch`),
+    # not the retired legacy `pi-harness launch` slash command.
+    assert "ms launch" in text
