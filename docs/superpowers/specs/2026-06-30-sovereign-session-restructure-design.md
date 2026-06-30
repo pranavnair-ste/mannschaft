@@ -74,7 +74,7 @@ code is small and concentrated in a launcher, one status command, and four autho
 | D2 | Solo agent is **hands-on (A)** — `read/bash/edit/write` in the working tree — *and* gives **explicit control (C)** via a conversational confirmation gate before any team dispatch. |
 | D3 | Skills are pluggable `SKILL.md` (pi-native convention). We ship harness skills; users can add their own. |
 | D4 | The team pipeline is exposed **as a skill (approach 2a)** that shells out to `ms launch`. No new runtime. Evolve to an extension later (2c). |
-| D5 | The stale raw-clawteam pi skill is **retired/replaced** so the session routes through the mannschaft pipeline. |
+| D5 | The stale raw-clawteam pi skill is **automatically and reversibly retired** (moved aside, idempotent, logged) on `ms chat` first-run, so the session routes through the mannschaft pipeline. |
 | D6 | The blocking linter is **demoted to advisory**; an interactive **shape-spec** skill replaces it as the way specs are created. |
 | D7 | Team dispatch is **background/detached** so the chat stays live and observable. |
 | D8 | In-chat observation v1 = **option A**: background dispatch + concise `ms status` narration + surfaced **observability-fork deep-link**. The fork dashboard stays. |
@@ -160,9 +160,12 @@ targeted at the pi solo session:
 per-task status, current step, tokens, cost, elapsed wall-clock, terminal state, and the run
 branch. This is the data source that makes in-chat observation work without an extension.
 
-**Retire the stale raw-clawteam pi skill** (`~/.pi/agent/skills/clawteam`): remove or shadow it
-(with user consent) during `ms chat` setup / an `ms skills` install step, and install the
-mannschaft skill in its place so the session cannot take the value-stripped shortcut.
+**Retire the stale raw-clawteam pi skill** (`~/.pi/agent/skills/clawteam`): **automatically and
+reversibly** disabled on `ms chat` first-run setup — *moved aside* (e.g. renamed to
+`clawteam.disabled/` or relocated to a harness-managed backup dir), never hard-deleted, so it is
+recoverable. The operation is **idempotent** (no-op if already disabled / absent) and **logged**
+(one line telling the user what was moved and how to restore it). The mannschaft skill is
+installed/loaded in its place so the session cannot take the value-stripped shortcut.
 
 ### Phase 3 — Brainstorm-to-spec + choose-team-models + de-gate the linter
 
