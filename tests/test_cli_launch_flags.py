@@ -22,7 +22,10 @@ def _patches(coord):
     spec = MagicMock(id="spec-1")
     return [
         patch("pi_harness.cli._load_spec_or_die", return_value=spec),
-        patch("pi_harness.cli._lint_or_die", return_value=None),
+        # The launch path now calls the advisory linter (the blocking
+        # `_lint_or_die` gate was demoted in the sovereign-session
+        # restructure), so patch the function launch actually invokes.
+        patch("pi_harness.cli._lint_advisory", return_value=None),
         patch("pi_harness.config.load_config", return_value=MagicMock()),
         patch("pi_harness.cli._decompose_or_die", return_value=[]),
         patch("pi_harness.cli.spec_to_runspec", return_value=MagicMock()),

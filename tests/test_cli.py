@@ -175,7 +175,10 @@ def test_stop_command_unknown_run_exits_nonzero(monkeypatch):
     assert result.exit_code == 1
 
 
-def test_launch_blocks_on_lint_errors(tmp_path, monkeypatch):
+def test_launch_lint_is_advisory_not_a_gate(tmp_path, monkeypatch):
+    """De-gate: the launch-time linter is advisory only. A spec the linter would
+    flag still launches (spec quality now comes from the interactive shape-spec
+    skill); `ms lint` keeps its severity-based exit codes for explicit checks."""
     from pi_harness.cli import app
 
     bad = Spec(
@@ -187,15 +190,24 @@ def test_launch_blocks_on_lint_errors(tmp_path, monkeypatch):
     bad_path = tmp_path / "bad.md"
     serialize_spec(bad, bad_path)
 
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     fake_coord = MagicMock()
+    fake_coord.launch.return_value = MagicMock(run_id="run-bad", run_branch=None)
     monkeypatch.setattr("pi_harness.cli._make_coordinator", lambda cfg: fake_coord)
+    monkeypatch.setattr("pi_harness.cli._decompose_or_die", lambda spec, cfg: _canned_tasks())
 
-    result = runner.invoke(app, ["launch", str(bad_path)])
-    assert result.exit_code != 0
-    fake_coord.launch.assert_not_called()
+    result = runner.invoke(app, ["launch", str(bad_path), "--detach"])
+    assert result.exit_code == 0, result.stdout
+    # Findings surfaced as advice, but the launch proceeded.
+    assert "advisory" in result.stdout.lower()
+    fake_coord.launch.assert_called_once()
 
 
-def test_launch_allow_warnings_bypasses_warnings(good_spec, monkeypatch):
+def test_launch_warnings_no_longer_block_and_allow_warnings_is_a_noop(good_spec, monkeypatch):
+    """De-gate: a warning-only spec launches with OR without --allow-warnings.
+
+    The blocking lint gate is gone; --allow-warnings is kept as a harmless
+    no-op for backward-compat."""
     from pi_harness.cli import app
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -207,19 +219,19 @@ def test_launch_allow_warnings_bypasses_warnings(good_spec, monkeypatch):
     good_spec.write_text(text)
 
     fake_coord = MagicMock()
-    fake_coord.launch.return_value = MagicMock(run_id="run-warn")
+    fake_coord.launch.return_value = MagicMock(run_id="run-warn", run_branch=None)
     monkeypatch.setattr("pi_harness.cli._make_coordinator", lambda cfg: fake_coord)
     monkeypatch.setattr("pi_harness.cli._decompose_or_die", lambda spec, cfg: _canned_tasks())
 
-    # Without --allow-warnings: exits 2, no launch.
+    # Without --allow-warnings: still proceeds (no blocking gate).
     r1 = runner.invoke(app, ["launch", str(good_spec), "--detach"])
-    assert r1.exit_code == 2
-    fake_coord.launch.assert_not_called()
+    assert r1.exit_code == 0, r1.stdout
+    assert fake_coord.launch.call_count == 1
 
-    # With --allow-warnings: proceeds.
+    # With --allow-warnings: same outcome — the flag is a no-op now.
     r2 = runner.invoke(app, ["launch", str(good_spec), "--allow-warnings", "--detach"])
     assert r2.exit_code == 0, r2.stdout
-    fake_coord.launch.assert_called_once()
+    assert fake_coord.launch.call_count == 2
 
 
 def test_launch_session_flag_threads_into_runspec(good_spec, monkeypatch):

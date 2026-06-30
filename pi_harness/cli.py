@@ -22,8 +22,11 @@ from typing import Optional
 import typer
 
 from pi_harness import __version__
+from pi_harness.pi_models import ensure_local_provider_from_settings
+from pi_harness.session import launch_chat
 from pi_harness.spec.format import parse_spec_file, spec_path, spec_storage_dir
 from pi_harness.spec.runspec import build_coordinator, spec_to_runspec
+from pi_harness.status import build_status, render_status_human
 
 app = typer.Typer(
     name="ms",
@@ -87,6 +90,20 @@ def _lint_or_die(spec, *, allow_warnings: bool):
     return result
 
 
+def _lint_advisory(spec) -> None:
+    """Run the linter and print findings as SUGGESTIONS. Never blocks a launch
+    (the blocking gate is gone — spec quality now comes from the interactive
+    shape-spec skill). `ms lint` still exits by severity for explicit checks."""
+    from pi_harness.spec.linter import Linter
+
+    result = Linter().lint(spec)
+    issues = list(result.errors) + list(result.warnings)
+    if issues:
+        typer.echo("spec suggestions (advisory — launching anyway):")
+        for v in issues:
+            typer.echo(f"  [{v.rule_name}] {v.message} ({v.location})")
+
+
 def _decompose_or_die(spec, cfg):
     from pi_harness.spec.decomposer import Decomposer
 
@@ -141,7 +158,7 @@ def launch(
     from pi_harness.config import load_config
 
     spec = _load_spec_or_die(spec_path)
-    _lint_or_die(spec, allow_warnings=allow_warnings)
+    _lint_advisory(spec)
 
     if api_url:
         import httpx
@@ -155,7 +172,6 @@ def launch(
     # Sovereign default: register the local provider in pi's models.json from
     # the saved settings so a run uses the local MLX endpoint without first
     # touching the Settings UI (no-op when all buckets are `api`).
-    from pi_harness.pi_models import ensure_local_provider_from_settings
     ensure_local_provider_from_settings()
     tasks = _decompose_or_die(spec, cfg)
     run_spec = spec_to_runspec(
@@ -190,6 +206,41 @@ def launch(
     if not result.success:
         typer.echo("run did not complete successfully", err=True)
         raise typer.Exit(code=1)
+
+
+@app.command()
+def chat(
+    provider: Optional[str] = typer.Option(None, "--provider", help="Override the session provider (local | api)."),
+    model: Optional[str] = typer.Option(None, "--model", help="Override the session model id."),
+) -> None:
+    """Start the sovereign interactive coding session (local model by default).
+
+    Ungags `pi`: interactive, session-saving, skills + context aware. For
+    team-sized work it offers to dispatch the agentic-team pipeline."""
+    rc = launch_chat(provider_override=provider, model_override=model)
+    if rc != 0:
+        raise typer.Exit(code=rc)
+
+
+@app.command()
+def status(
+    run_id: str = typer.Argument(..., help="The run_id to report on."),
+    as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Concise status for a run (for in-chat narration or quick checks)."""
+    from pi_harness.config import load_config
+
+    cfg = load_config()
+    st = build_status(run_id, db_path=cfg.trajectory_db_path)
+    if st is None:
+        typer.echo(f"run {run_id} not found", err=False)
+        raise typer.Exit(code=1)
+    if as_json:
+        import json
+
+        typer.echo(json.dumps(st, indent=2))
+    else:
+        typer.echo(render_status_human(st))
 
 
 @app.command()
