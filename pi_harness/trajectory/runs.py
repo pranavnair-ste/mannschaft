@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at TEXT,
     ended_at TEXT,
     team_name TEXT,
-    run_spec_json TEXT
+    run_spec_json TEXT,
+    run_branch TEXT
 )
 """
 
@@ -87,6 +88,13 @@ def init_runs_table(db_path: Path | str | None = None) -> Path:
     init_db(path)  # ensures trajectory_events + indexes exist too
     with _connect(path) as conn:
         conn.execute(_CREATE_RUNS)
+        # Backfill run_branch on dbs created before the column existed. CREATE
+        # TABLE IF NOT EXISTS leaves an old schema untouched, so an explicit
+        # ADD COLUMN is the only way an existing runs table gains it. Guarded by
+        # PRAGMA so this stays idempotent (SQLite has no ADD COLUMN IF NOT EXISTS).
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(runs)").fetchall()}
+        if "run_branch" not in cols:
+            conn.execute("ALTER TABLE runs ADD COLUMN run_branch TEXT")
         conn.commit()
     _runs_initialized.add(str(path))
     return path
@@ -107,9 +115,16 @@ def register_run(
     branch_from_step: str | None = None,
     overrides: dict[str, Any] | None = None,
     status: str = "running",
+    run_branch: str | None = None,
     db_path: Path | str | None = None,
 ) -> None:
-    """Insert (or replace) a run row. Called at launch with status="running"."""
+    """Insert (or replace) a run row. Called at launch with status="running".
+
+    ``run_branch`` is the git ``run/<uuid>`` branch the coordinator isolates an
+    out-of-place run onto (None for ``--in-place`` runs). It lives only on the
+    in-memory RunHandle otherwise, so persisting it here is what lets
+    ``ms status`` report the branch during and after a run.
+    """
     path = _resolve_db_path(db_path)
     init_runs_table(path)
     with _connect(path) as conn:
@@ -117,8 +132,8 @@ def register_run(
             """INSERT OR REPLACE INTO runs
                (run_id, spec_id, parent_run_id, branch_from_step, overrides, goal,
                 topology, sync_mode, session_id, status, started_at, ended_at,
-                team_name, run_spec_json)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                team_name, run_spec_json, run_branch)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 run_id,
                 spec_id,
@@ -134,6 +149,7 @@ def register_run(
                 None,
                 team_name,
                 run_spec_json,
+                run_branch,
             ),
         )
         conn.commit()

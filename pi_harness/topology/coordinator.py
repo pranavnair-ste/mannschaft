@@ -247,6 +247,7 @@ class Coordinator:
                 parent_run_id=parent_run_id,
                 branch_from_step=branch_from_step,
                 overrides=overrides,
+                run_branch=run_branch,
                 db_path=self._config.trajectory_db_path,
             )
 
