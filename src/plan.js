@@ -1,8 +1,8 @@
-/* Magnolia 3BHK Premium (units 607-1207 & 1407-2907) — geometry transcribed from the builder's plan.
+/* Magnolia 3BHK Premium — geometry transcribed from the builder's plan.
  *
  * All plan coordinates are millimetres in (u, v):
  *   u runs down the photographed sheet, v runs across it. World x = v, world z = u, so the
- *   3D top view matches reference/floor-plan.jpg as photographed.
+ *   3D top view matches the builder's plan sheet as photographed (not kept in this repo).
  *   u = 0 is the foyer/living boundary, v = 0 is the inside face of the long living-room wall.
  *
  * Room sizes are the figures printed on the plan. Wall thicknesses, door and window positions
@@ -42,7 +42,7 @@ var PLAN = (function () {
     { id: 'mbed',         type: 'door',   rect: [2400, 3200, 7210, 7325],    sill: 0, head: D, leaf: ['hi', 1] },
     { id: 'bath3',        type: 'door',   rect: [3315, 3430, 8250, 8950],    sill: 0, head: D, leaf: ['hi', 1] },
     { id: 'bed2',         type: 'door',   rect: [3200, 3315, 6150, 7000],    sill: 0, head: D, leaf: ['hi', 1] },
-    { id: 'deck',         type: 'slider', rect: [4975, 5175, 400, 3150],     sill: 0, head: 2.4 },
+    { id: 'deck',         type: 'slider', rect: [4975, 5175, 0, 3550],     sill: 0, head: 99 },
     { id: 'bed1-win',     type: 'window', rect: [-700, 1100, 11880, 12080],  sill: 0.9, head: D },
     { id: 'bed2-win',     type: 'window', rect: [6965, 7165, 3760, 7110],    sill: 0, head: 99 },
     { id: 'mbed-win',     type: 'window', rect: [7065, 7265, 9165, 12855],   sill: 0, head: 99 },
@@ -122,6 +122,7 @@ var PLAN = (function () {
     height: 2.9,      // floor to ceiling, metres — assumed, not on the plan
     wallT: 200,       // outer wall thickness, mm — assumed
     eye: 1.6,         // walk-mode eye height, metres
+    outside: { height: 78 }, // floor level above the ground, metres — drives the view from the windows
     rooms: rooms, openings: openings, furniture: F
   };
 })();

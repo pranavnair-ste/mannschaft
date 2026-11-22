@@ -12,7 +12,7 @@
     '<div id="hint" class="chip"></div>' +
     '<div id="stick" hidden><i></i></div></div>' +
     '<aside id="panel">' +
-    '<header><h1>' + P.name + '</h1><p class="sub">Unit 07 · ' + P.carpetArea + ' carpet · modelled 1:1 in metres</p></header>' +
+    '<header><h1>' + P.name + '</h1><p class="sub">' + P.carpetArea + ' carpet · modelled 1:1 in metres</p></header>' +
     '<section><h2>View</h2><div class="seg" id="views">' +
     '<button data-v="doll">Dollhouse</button><button data-v="plan">Plan</button><button data-v="walk">Walk</button></div>' +
     '<label class="row" for="goto">Stand in<select id="goto"></select></label>' +
@@ -22,7 +22,7 @@
     '<label class="check"><input type="checkbox" id="t-lab" checked> Room labels</label>' +
     '<button id="vr" hidden>Enter VR (life size)</button></section>' +
     '<section><h2>Palette</h2><label class="row" for="theme">Start from<select id="theme"></select></label>' +
-    '<p class="note">The four palettes are stand-ins until the real theme palettes arrive.</p></section>' +
+    '<p class="note">Themes are derived from CeeBee Design Studio’s interior styles; Bare shell is a neutral baseline.</p></section>' +
     '<section><h2>Selected surface</h2><p id="sel-name" class="sel">Click any wall, floor, ceiling or furniture piece.</p>' +
     '<div id="sel-fields" class="swatches"></div><button id="sel-clear" hidden>Clear this room’s overrides</button></section>' +
     '<section><h2>Whole home</h2><label class="row" for="finish">Flooring<select id="finish"><option value="wood">Wood planks</option><option value="tile">Large tiles</option><option value="plain">Plain</option></select></label><div id="base-fields" class="swatches"></div>' +
@@ -212,20 +212,15 @@
   var scene = new THREE.Scene();
   var ctr = new THREE.Vector3((xs[1] + xs[NX - 1]) / 2, 0, (zs[1] + zs[NZ - 1]) / 2);
   var rig = new THREE.Group(); scene.add(rig);
-  var camera = new THREE.PerspectiveCamera(60, 1, 0.05, 400); rig.add(camera);
+  var camera = new THREE.PerspectiveCamera(60, 1, 0.08, 5000); rig.add(camera);
   var orbit = new THREE.OrbitControls(camera, canvas);
   orbit.enableDamping = true; orbit.dampingFactor = 0.12; orbit.maxPolarAngle = Math.PI / 2 - 0.02; orbit.minDistance = 2; orbit.maxDistance = 60;
 
-  var skyCv = document.createElement('canvas'); skyCv.width = 4; skyCv.height = 512;
-  var skyTex = new THREE.CanvasTexture(skyCv); skyTex.encoding = THREE.sRGBEncoding;
-  var skyMat = new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, toneMapped: false, depthWrite: false });
-  var dome = new THREE.Mesh(new THREE.SphereGeometry(180, 32, 24), skyMat); dome.position.copy(ctr); scene.add(dome);
-  var envScene = new THREE.Scene(); envScene.add(new THREE.Mesh(dome.geometry, skyMat));
   var pmrem = new THREE.PMREMGenerator(renderer), envRT = null;
 
   var hemi = new THREE.HemisphereLight(0xdfe9ff, 0xb8a890, 0.3); scene.add(hemi);
   var sun = new THREE.DirectionalLight(0xfff0da, 2.6); // low sun from the deck / bedroom-window side
-  sun.position.set(ctr.x + 14, 17, ctr.z + 24); sun.target.position.copy(ctr); scene.add(sun); scene.add(sun.target);
+  sun.position.set(ctr.x + 14, 22.5, ctr.z + 24); sun.target.position.copy(ctr); scene.add(sun); scene.add(sun.target);
   sun.castShadow = true; sun.shadow.mapSize.set(coarse ? 2048 : 4096, coarse ? 2048 : 4096);
   var sc = sun.shadow.camera; sc.left = -13; sc.right = 13; sc.top = 13; sc.bottom = -13; sc.near = 1; sc.far = 80;
   sun.shadow.bias = -0.0002; sun.shadow.normalBias = 0.012;
@@ -270,6 +265,96 @@
     plaster: tex(256, 0.7, drawNoise), fabric: tex(256, 0.25, drawNoise)
   };
   TX.wood.rotation = Math.PI / 2;
+  // Sky: a photographed sky panorama (assets/sky-*.jpg) on a dome, with haze painted in below the horizon.
+  var skyCv = document.createElement('canvas'); skyCv.width = coarse ? 2048 : 4096; skyCv.height = skyCv.width / 2;
+  var skyTex = new THREE.CanvasTexture(skyCv); skyTex.encoding = THREE.sRGBEncoding;
+  var skyMat = new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, toneMapped: false, depthWrite: false, fog: false });
+  var dome = new THREE.Mesh(new THREE.SphereGeometry(3800, 48, 32), skyMat); dome.position.copy(ctr); dome.scale.x = -1; scene.add(dome);
+  var envScene = new THREE.Scene(), envDome = new THREE.Mesh(dome.geometry, skyMat); envDome.scale.x = -1; envScene.add(envDome);
+  scene.fog = new THREE.FogExp2(0xaaaaaa, 0.0011);
+  var skyImgs = {}, lightName = 'day';
+  function paintSky(L, img) {
+    var w = skyCv.width, h = skyCv.height, c2 = skyCv.getContext('2d'), hz = L.haze, k;
+    var g = c2.createLinearGradient(0, 0, 0, h);
+    L.sky.forEach(function (s) { g.addColorStop(s[0], s[1]); });
+    c2.fillStyle = g; c2.fillRect(0, 0, w, h);
+    if (img) {
+      c2.drawImage(img, 0, 0, w, h);
+      var d = c2.getImageData(0, Math.round(h * 0.475), w, 4).data, n = d.length / 4; hz = [0, 0, 0];
+      for (k = 0; k < d.length; k += 4) { hz[0] += d[k] / n; hz[1] += d[k + 1] / n; hz[2] += d[k + 2] / n; }
+      hz = hz.map(Math.round);
+    }
+    var g2 = c2.createLinearGradient(0, h * 0.465, 0, h * 0.5);
+    g2.addColorStop(0, 'rgba(' + hz.join(',') + ',0)'); g2.addColorStop(1, 'rgb(' + hz.join(',') + ')');
+    c2.fillStyle = g2; c2.fillRect(0, h * 0.465, w, h * 0.535);
+    skyTex.needsUpdate = true;
+    scene.fog.color.setRGB(hz[0] / 255, hz[1] / 255, hz[2] / 255).convertSRGBToLinear();
+    dome.rotation.y = envDome.rotation.y = L.rot;
+    if (envRT) envRT.dispose();
+    envRT = pmrem.fromScene(envScene, 0.02); scene.environment = envRT.texture;
+  }
+
+  // Outside: the flat sits high in a tower, so the windows look down on a modelled city that fades into the sky's haze.
+  var GROUND = -((P.outside && P.outside.height) || 78);
+  var cityU = { uDay: { value: new THREE.Vector3(1, 1, 1) }, uNight: { value: 0 }, uGround: { value: GROUND }, uSun: { value: new THREE.Vector3(14, 22.5, 24).normalize() } };
+  var cityMat = new THREE.MeshBasicMaterial({ toneMapped: false });
+  cityMat.extensions = { derivatives: true };
+  cityMat.onBeforeCompile = function (sh) {
+    for (var q in cityU) sh.uniforms[q] = cityU[q];
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWp; varying vec3 vWn;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvec4 wpc = vec4(transformed, 1.0);\n#ifdef USE_INSTANCING\nwpc = instanceMatrix * wpc;\n#endif\nvWp = (modelMatrix * wpc).xyz; vWn = normal;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWp; varying vec3 vWn; uniform vec3 uDay; uniform float uNight; uniform float uGround; uniform vec3 uSun;')
+      .replace('#include <color_fragment>', [
+        '#include <color_fragment>',
+        'vec3 cb = diffuseColor.rgb; float glow = 0.0;',
+        'float shade = vWn.y > 0.5 ? 0.82 : 0.6 + 0.4 * max(0.0, dot(vWn, uSun));',
+        'if (vWn.y < 0.5) {',
+        '  float cu = abs(vWn.x) > 0.5 ? vWp.z : vWp.x;',
+        '  vec2 cell = vec2(cu / 3.4, (vWp.y - uGround) / 3.1); vec2 cf = fract(cell); vec2 ci = floor(cell);',
+        '  float ch = fract(sin(dot(ci + floor(vWp.xz / 9.0).yx * 7.0, vec2(12.9898, 78.233))) * 43758.5453);',
+        '  float win = step(0.16, cf.x) * step(cf.x, 0.84) * step(0.32, cf.y) * step(cf.y, 0.82);',
+        '  float lod = clamp(1.0 - max(fwidth(cell.x), fwidth(cell.y)) * 1.3, 0.0, 1.0);',
+        '  cb *= mix(0.74, mix(1.0, 0.34 + 0.26 * ch, win), lod);',
+        '  glow = mix(0.1, win * step(0.62, ch), lod);',
+        '}',
+        'diffuseColor.rgb = cb * shade * uDay + vec3(1.0, 0.74, 0.4) * glow * uNight;'
+      ].join('\n'));
+  };
+  var outside = new THREE.Group(); scene.add(outside);
+  (function () {
+    var PITCH = 80, N = 18, list = [], cols = ['#d9d4c8', '#cfc9bd', '#e3ded2', '#b9b4aa', '#c9b8a2', '#a8a59e', '#d6c3ae', '#9aa3aa', '#e8e4dc', '#c2a48a'];
+    var s2 = 99; function r2() { s2 = (s2 * 16807) % 2147483647; return s2 / 2147483647; }
+    for (var bx = -N; bx < N; bx++) for (var bz = -N; bz < N; bz++) for (var lx = 0; lx < 2; lx++) for (var lz = 0; lz < 2; lz++) {
+      var a = r2(), b = r2(), c = r2(), d = r2(), e = r2(), f = r2(), g = r2();
+      if (a > 0.7) continue;
+      var w = 14 + b * 13, dp = 14 + c * 13, x = bx * PITCH + 8 + lx * 33 + w / 2 + d * (31 - w), z = bz * PITCH + 8 + lz * 33 + dp / 2 + e * (31 - dp);
+      if (Math.hypot(x, z) < 75) continue;
+      var h = f < 0.74 ? 6 + g * 13 : f < 0.95 ? 20 + g * 26 : 50 + g * 55;
+      list.push([ctr.x + x, ctr.z + z, w, dp, GROUND, h, cols[(g * 97 | 0) % cols.length]]);
+    }
+    [[115, 150], [-130, 60], [90, -140]].forEach(function (p) { list.push([ctr.x + p[0], ctr.z + p[1], 30, 30, GROUND, 96, '#e6e1d6']); }); // sibling towers
+    var bw = xs[NX - 1] - xs[1] + 8, bd = zs[NZ - 1] - zs[1]; // this tower, below and above the flat
+    list.push([ctr.x - 4, ctr.z, bw, bd, GROUND, -GROUND - 0.06, '#e6e1d6'], [ctr.x - 4, ctr.z, bw, bd, H + 0.03, 9.3, '#e6e1d6']);
+    var mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), cityMat, list.length), m4 = new THREE.Matrix4(), col = new THREE.Color();
+    list.forEach(function (b, ix) {
+      m4.compose(new THREE.Vector3(b[0], b[4] + b[5] / 2, b[1]), new THREE.Quaternion(), new THREE.Vector3(b[2], b[5], b[3]));
+      mesh.setMatrixAt(ix, m4); mesh.setColorAt(ix, col.set(b[6]).convertSRGBToLinear());
+    });
+    mesh.frustumCulled = false; outside.add(mesh);
+    var gt = tex(1024, 4 * PITCH, function (c2, S) { // four street blocks per tile
+      var q = S / 4;
+      c2.fillStyle = '#7f8a78'; c2.fillRect(0, 0, S, S);
+      for (var i2 = 0; i2 < 4; i2++) for (var j2 = 0; j2 < 4; j2++) {
+        for (var k = 0; k < 9; k++) { c2.fillStyle = r2() < 0.6 ? 'rgba(62,98,52,' + (0.35 + r2() * 0.4) + ')' : 'rgba(150,146,136,' + (0.3 + r2() * 0.4) + ')'; c2.fillRect(i2 * q + 22 + r2() * (q - 70), j2 * q + 22 + r2() * (q - 70), 14 + r2() * 46, 14 + r2() * 46); }
+        c2.fillStyle = '#4a4c4f'; c2.fillRect(i2 * q - 10, 0, 20, S); c2.fillRect(0, j2 * q - 10, S, 20); c2.fillRect(S - 10, 0, 10, S); c2.fillRect(0, S - 10, S, 10);
+        c2.fillStyle = 'rgba(230,226,200,0.7)'; for (var t = 0; t < S; t += 14) { c2.fillRect(i2 * q - 1, t, 2, 7); c2.fillRect(t, j2 * q - 1, 7, 2); }
+      }
+    }, true);
+    var ground = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000), new THREE.MeshBasicMaterial({ map: gt, toneMapped: false }));
+    gt.repeat.set(9000 / (4 * PITCH), 9000 / (4 * PITCH)); gt.offset.set(0.5 - ((ctr.x / (4 * PITCH)) % 1), 0.5 + ((ctr.z / (4 * PITCH)) % 1));
+    ground.rotation.x = -Math.PI / 2; ground.position.set(ctr.x, GROUND, ctr.z); outside.add(ground);
+    outside.userData.ground = ground;
+  })();
   function aoTex(withFurn) { // top-down occlusion: dark along walls and around furniture feet, blurred
     var S = 25, w = Math.ceil(XW * S), h = Math.ceil(ZD * S);
     var cv = document.createElement('canvas'); cv.width = w; cv.height = h; var c2 = cv.getContext('2d');
@@ -376,15 +461,19 @@
   scene.add(fixtures);
 
   var LIGHTING = {
-    day: { sky: [[0, '#2f6fc0'], [0.4, '#9ec4e8'], [0.495, '#eef3f4'], [0.51, '#bdb8ab'], [1, '#8d887d']], sun: 2.4, hemi: 0.95, fill: 0.3, lamp: 0, glow: 0.2, exp: 0.95 },
-    evening: { sky: [[0, '#060a1a'], [0.38, '#1a2142'], [0.48, '#7a4a52'], [0.5, '#d27a3c'], [0.52, '#1c1c24'], [1, '#101014']], sun: 0, hemi: 0.1, fill: 0, lamp: 1.25, glow: 4, exp: 1.05 }
+    day: { sky: [[0, '#2f6fc0'], [0.4, '#9ec4e8'], [0.495, '#eef3f4'], [0.51, '#bdb8ab'], [1, '#8d887d']], sun: 2.4, hemi: 0.95, fill: 0.3, lamp: 0, glow: 0.2, exp: 0.95, haze: [167, 172, 176], rot: 2.714, city: [1, 1, 1], night: 0 },
+    evening: { sky: [[0, '#060a1a'], [0.38, '#1a2142'], [0.48, '#7a4a52'], [0.5, '#d27a3c'], [0.52, '#1c1c24'], [1, '#101014']], sun: 0, hemi: 0.1, fill: 0, lamp: 1.25, glow: 4, exp: 1.05, haze: [150, 132, 148], rot: 2.2, city: [0.3, 0.29, 0.4], night: 1 }
   };
   function setLighting(name) {
-    var L = LIGHTING[name] || LIGHTING.day, c2 = skyCv.getContext('2d'), g = c2.createLinearGradient(0, 0, 0, 512);
-    L.sky.forEach(function (s) { g.addColorStop(s[0], s[1]); });
-    c2.fillStyle = g; c2.fillRect(0, 0, 4, 512); skyTex.needsUpdate = true;
-    if (envRT) envRT.dispose();
-    envRT = pmrem.fromScene(envScene, 0.02); scene.environment = envRT.texture;
+    var L = LIGHTING[name] || LIGHTING.day; lightName = name;
+    paintSky(L, skyImgs[name]);
+    if (!skyImgs[name]) { // the gradient above is only a stand-in until the photograph loads
+      var im = new Image();
+      im.onload = function () { skyImgs[name] = im; if (lightName === name) paintSky(L, im); };
+      im.src = (window.SKY_SRC || {})[name] || 'assets/sky-' + name + '.jpg';
+    }
+    cityU.uDay.value.set(L.city[0], L.city[1], L.city[2]); cityU.uNight.value = L.night;
+    outside.userData.ground.material.color.setRGB(L.city[0] * 0.8, L.city[1] * 0.8, L.city[2] * 0.8);
     sun.visible = L.sun > 0; sun.intensity = L.sun; hemi.intensity = L.hemi; fill.intensity = L.fill;
     lamps.forEach(function (l) { l.visible = L.lamp > 0; l.intensity = L.lamp; });
     lampMat.emissiveIntensity = L.glow; renderer.toneMappingExposure = L.exp;
@@ -417,7 +506,7 @@
   function refresh() {
     var walk = mode === 'walk', cut = !walk && (mode === 'plan' || $('t-cut').checked);
     ceilings.forEach(function (m) { m.visible = walk; });
-    labels.visible = !walk && $('t-lab').checked;
+    labels.visible = !walk && $('t-lab').checked; outside.visible = walk;
     furn.visible = $('t-furn').checked; fixtures.visible = walk;
     Object.keys(mats).forEach(function (key) { if (key.indexOf('floor|') === 0) mats[key].aoMap = furn.visible ? aoFurn : aoBare; });
     renderer.shadowMap.needsUpdate = true;

@@ -1,7 +1,7 @@
 # Magnolia Walkthrough
 
 A true-scale (1 unit = 1 metre) 3D model of the Magnolia 3BHK Premium flat, built from the
-builder's floor plan in `reference/floor-plan.jpg`. It exists to try interior colour palettes
+builder's floor plan (the plan sheet itself is deliberately not kept in this repo). It exists to try interior colour palettes
 on the real room proportions before committing to them.
 
 ## Run it
@@ -40,9 +40,16 @@ way. Anyone with the URL can see the floor plan and unit details.
 - Edits are remembered in the browser. **Palette JSON** is the portable form: copy it out to
   keep a palette, paste one in to apply it.
 
-## Adding the real theme palettes
+## Theme palettes
 
-Add an object to `src/themes.js` (format is documented at the top of that file), or paste the
+The built-in themes are derived from the interior styles on the designer's site,
+[CeeBee Design Studio](https://www.ceebeedesignstudio.com/interior-styles), and carry the studio's
+own style names. The site publishes no colour codes, so the colours were sampled from each project's
+photographs (following any colours and materials the project page names) and are approximations to
+check against real samples. Each theme records the page it came from in `source`. **Bare shell** is
+kept as a neutral baseline.
+
+To add or change a palette, edit `src/themes.js` (format is documented at the top of that file), or paste the
 JSON into the app. A palette has whole-home defaults (`base`), furniture groups (`furniture`)
 and optional per-room overrides (`rooms`), including single accent walls.
 
@@ -57,6 +64,13 @@ and optional per-room overrides (`rooms`), including single accent walls.
   labels are all generated from it.
 - The passage outside the bedrooms (puja niche flanked by the Bedroom 1 and Master bedroom
   doors) is the least legible part of the photo and is the best guess at the layout.
+
+## The view outside
+
+The flat is modelled high in its tower (`outside.height` in `src/plan.js`). The sky is a
+photographed panorama; the city below is generic modelled geometry, not the real surroundings.
+Sky photographs are CC0 from Poly Haven (`kloofendal_38d_partly_cloudy_puresky`,
+`qwantani_dusk_2_puresky`), resized into `assets/`.
 
 ## Files
 

@@ -18,6 +18,7 @@ ${read('style.css')}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
+window.SKY_SRC = { day: 'data:image/jpeg;base64,${readFileSync(resolve(root, 'assets/sky-day.jpg')).toString('base64')}', evening: 'data:image/jpeg;base64,${readFileSync(resolve(root, 'assets/sky-evening.jpg')).toString('base64')}' };
 ${['src/plan.js', 'src/themes.js', 'src/app.js'].map(read).join('\n')}
 </script>
 `;
