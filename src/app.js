@@ -351,6 +351,7 @@
       if (alongX) { var hx = lo ? r.x0 : r.x1 - t, a = dir > 0 ? r.z1 : r.z0 - w; addBox(scene, 'trim', hx, hx + t, a, a + w, 0, o.head); }
       else { var hz = lo ? r.z0 : r.z1 - t, b = dir > 0 ? r.x1 : r.x0 - w; addBox(scene, 'trim', b, b + w, hz, hz + t, 0, o.head); }
     } else if (o.type === 'window' || o.type === 'slider') {
+      o = { type: o.type, sill: o.sill, head: Math.min(o.head, H) };
       var x0 = r.x0, x1 = r.x1, z0 = r.z0, z1 = r.z1, sl = o.type === 'slider', fr = 0.045, mx = (r.x0 + r.x1) / 2, mz = (r.z0 + r.z1) / 2;
       function bar(a0, a1, y0, y1) { if (alongX) addBox(scene, 'metal', a0, a1, mz - 0.03, mz + 0.03, y0, y1); else addBox(scene, 'metal', mx - 0.03, mx + 0.03, a0, a1, y0, y1); }
       var A0 = alongX ? x0 : z0, A1 = alongX ? x1 : z1, AM = (A0 + A1) / 2;
@@ -453,7 +454,7 @@
     while (i < NX && xs[i + 1] < x) i++;
     while (j < NZ && zs[j + 1] < z) j++;
     var c = cellAt(i, j);
-    return c.t === 'wall' || c.t === 'void' || (c.t === 'open' && c.o.sill > 0.2);
+    return c.t === 'wall' || c.t === 'void' || (c.t === 'open' && (c.o.sill > 0.2 || c.o.type === 'window'));
   }
   function free(x, z) { var r = 0.22; return !(blocked(x - r, z - r) || blocked(x + r, z - r) || blocked(x - r, z + r) || blocked(x + r, z + r)); }
   function roomAt(x, z) { for (var k = 0; k < roomRects.length; k++) if (inside(roomRects[k], x, z, 0)) return roomById[roomRects[k].room]; return null; }
