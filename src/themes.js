@@ -1,7 +1,7 @@
 /* Theme palettes. Add a new object here (or paste one into the app's "Palette JSON" box) when
  * the designer's palettes arrive. Every colour is a hex string.
  *
- * base       — whole-home defaults
+ * base       — whole-home defaults; optional floorFinish: 'wood' | 'tile' | 'plain'
  * furniture  — placeholder furniture groups
  * rooms      — optional per-room overrides, keyed by room id from plan.js:
  *              { wall, floor, ceiling, walls: { N, E, S, W } }   (walls.* = one accent wall;

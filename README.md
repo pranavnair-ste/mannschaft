@@ -21,6 +21,9 @@ three.js loads from a CDN, so the page needs internet access.
   to jump there. Walls stop you; furniture does not.
 - **Click any surface** to recolour that wall, all walls in the room, its floor or its ceiling.
   Click furniture to recolour that material group.
+- **Lighting** switches between daylight (sun and shadows through the windows) and evening with
+  the ceiling lights on. **Flooring** switches dry rooms between wood planks, large tiles and plain.
+  Textures are near-white and tinted by the palette colour, so palettes still drive everything.
 - **Enter VR** appears on WebXR headsets and puts you inside the flat at life size.
 - Edits are remembered in the browser. **Palette JSON** is the portable form: copy it out to
   keep a palette, paste one in to apply it.
