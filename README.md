@@ -14,6 +14,18 @@ python3 -m http.server 8000     # then http://localhost:8000
 
 three.js loads from a CDN, so the page needs internet access.
 
+## Host it publicly (GitHub Pages)
+
+The site is static, so GitHub Pages can serve it straight from a branch:
+
+1. Repo **Settings → Pages**.
+2. Under **Build and deployment**, set **Source** to *Deploy from a branch*.
+3. Pick the branch that holds this app and the `/ (root)` folder, then **Save**.
+4. After a minute or two the page shows the public URL.
+
+Pages on a private repository needs a paid GitHub plan; the published site is public either
+way. Anyone with the URL can see the floor plan and unit details.
+
 ## Using it
 
 - **Dollhouse / Plan / Walk** — orbit the whole flat, look straight down, or walk through it at
