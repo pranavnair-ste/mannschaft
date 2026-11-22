@@ -1,20 +1,52 @@
-# mannschaft
+# Magnolia Walkthrough
 
-Symphony-style multi-agent orchestrator with an expertise loop — launch a spec, a team of coding agents builds it, and every step is captured to a trajectory store for observation, cost/reliability tracking, and replay.
+A true-scale (1 unit = 1 metre) 3D model of the Magnolia 3BHK Premium flat, built from the
+builder's floor plan in `reference/floor-plan.jpg`. It exists to try interior colour palettes
+on the real room proportions before committing to them.
 
-`ms` is the CLI surface (installed in the venv via `uv pip install -e .`; `pi-harness` remains as a legacy alias for the same command). Run `ms --help` for the full command list (`launch`, `spec`, `observe`, `serve`, `up`, `doctor`, …).
+## Run it
 
-## Observability stack
+No build step. Serve the folder and open it:
 
-See your runs live in race / swimlane / replay views. One command boots the whole local stack — the fork dashboard, the live event bridge, the FastAPI backend, and the Next.js UI:
-
-```bash
-source .venv/bin/activate
-export OBS_AUTH_TOKEN=$(openssl rand -hex 16) PI_HARNESS_OBS_ENABLED=1
-ms doctor   # preflight: bun, ports, fork checkout, UI deps, token
-ms up       # boots all four processes; Ctrl-C to tear down
+```
+python3 -m http.server 8000     # then http://localhost:8000
 ```
 
-Then open the tokenized fork UI that `up` prints, or the Symphony UI at `http://localhost:3000` and click **"Open in observability ↗"** on any run.
+three.js loads from a CDN, so the page needs internet access.
 
-**Full guide:** [`docs/observability-quickstart.md`](docs/observability-quickstart.md) — prerequisites, configuration, a runnable `launch` example, and troubleshooting.
+## Using it
+
+- **Dollhouse / Plan / Walk** — orbit the whole flat, look straight down, or walk through it at
+  eye height (1.6 m) and real walking pace. Drag to look, `W A S D` to move, double-click a floor
+  to jump there. Walls stop you; furniture does not.
+- **Click any surface** to recolour that wall, all walls in the room, its floor or its ceiling.
+  Click furniture to recolour that material group.
+- **Enter VR** appears on WebXR headsets and puts you inside the flat at life size.
+- Edits are remembered in the browser. **Palette JSON** is the portable form: copy it out to
+  keep a palette, paste one in to apply it.
+
+## Adding the real theme palettes
+
+Add an object to `src/themes.js` (format is documented at the top of that file), or paste the
+JSON into the app. A palette has whole-home defaults (`base`), furniture groups (`furniture`)
+and optional per-room overrides (`rooms`), including single accent walls.
+
+## What is measured and what is assumed
+
+`src/plan.js` holds all geometry in millimetres.
+
+- **From the plan:** every room's printed size, the room adjacencies, furniture positions.
+- **Assumed:** ceiling height (2.9 m), wall thicknesses (200 mm outer, 115 mm inner), exact door
+  and window positions and sizes, sill and head heights. The plan is marked NTS (not to scale)
+  and prints none of these. Check them on site and correct `plan.js` — walls, collisions and
+  labels are all generated from it.
+- The passage outside the bedrooms (puja niche flanked by the Bedroom 1 and Master bedroom
+  doors) is the least legible part of the photo and is the best guess at the layout.
+
+## Files
+
+- `index.html`, `style.css` — page shell
+- `src/plan.js` — rooms, openings, furniture
+- `src/themes.js` — palettes
+- `src/app.js` — builds the model, views, picking and the palette editor
+- `tools/bundle.mjs` — writes a single self-contained HTML file for sharing
