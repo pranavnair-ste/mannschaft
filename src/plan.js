@@ -116,6 +116,59 @@ var PLAN = (function () {
   wc(-2715, 1, 7550); vanity(-1100, -500, 6715);
   wc(6180, -1, 8200); vanity(3700, 4300, 7325);
 
+  // Bedroom 1 display pieces: floating shelves beside the wardrobe and an open stand in each window-side corner.
+  [900, 1300, 1700].forEach(function (y) { box('wood', 1915, 2115, 10550, 11350, y, y + 30); });
+  function stand(u0, v0) {
+    [[0, 0], [375, 0], [0, 375], [375, 375]].forEach(function (p) { box('metal', u0 + p[0], u0 + p[0] + 25, v0 + p[1], v0 + p[1] + 25, 0, 1830); });
+    [100, 550, 1000, 1450, 1800].forEach(function (y) { box('wood', u0, u0 + 400, v0, v0 + 400, y, y + 25); });
+  }
+  stand(-1725, 11480); stand(1715, 11480);
+
+  // Fixed-colour decor (not palette-driven): [colour, u0, u1, v0, v1, y0, y1, shape]. Club items use the
+  // blue-and-garnet colours only — no crest or wordmark.
+  var DEC = [], BLUE = '#004d98', GARNET = '#a50044', GOLD = '#edbb00', BRASS = '#c9a227';
+  function dec(c, u0, u1, v0, v1, y0, y1, shape) { DEC.push([c, u0, u1, v0, v1, y0, y1, shape || 'box']); }
+  var POTS = ['#c46a4a', '#f1ede4', '#3b3b3b'], GREENS = ['#6f9a6a', '#8fb89a', '#4f7f5f', '#a8c48f'], sn = 0;
+  function succulent(u, v, y) {
+    sn++;
+    dec(POTS[sn % 3], u - 45, u + 45, v - 45, v + 45, y, y + 70, 'cyl');
+    dec(GREENS[sn % 4], u - 58, u + 58, v - 58, v + 58, y + 50, y + 135, 'sph');
+  }
+  function ball(u, v, y) { dec('#f4f4f1', u - 105, u + 105, v - 105, v + 105, y, y + 210, 'sph'); }
+  function cup(u, v, y) {
+    dec('#2b2019', u - 45, u + 45, v - 45, v + 45, y, y + 25);
+    dec(BRASS, u - 14, u + 14, v - 14, v + 14, y + 25, y + 90, 'cyl');
+    dec(BRASS, u - 50, u + 50, v - 50, v + 50, y + 90, y + 210, 'cyl');
+  }
+  function stripes(u0, u1, v0, v1, y0, y1, n, alongV) { // alternating blue / garnet bands
+    for (var i = 0; i < n; i++) {
+      var c = i % 2 ? GARNET : BLUE;
+      if (alongV) dec(c, u0, u1, v0 + (v1 - v0) * i / n, v0 + (v1 - v0) * (i + 1) / n, y0, y1);
+      else dec(c, u0, u1, v0, v1, y0 + (y1 - y0) * i / n, y0 + (y1 - y0) * (i + 1) / n);
+    }
+  }
+  // shelves beside the wardrobe (south wall)
+  ball(2010, 10670, 930); succulent(2010, 10900, 930); stripes(1935, 2095, 11020, 11300, 930, 1020, 3); dec(GOLD, 1935, 2095, 11020, 11300, 1020, 1045);
+  cup(2010, 10680, 1330); succulent(2000, 10880, 1330); succulent(2030, 11030, 1330); stripes(2085, 2105, 11130, 11330, 1330, 1600, 4, true);
+  stripes(1950, 2090, 10600, 10900, 1730, 1790, 6, true); succulent(2010, 11040, 1730); succulent(2000, 11230, 1730);
+  // scarf pinned above the shelves
+  dec(GOLD, 2100, 2115, 10530, 10560, 2080, 2260); stripes(2100, 2115, 10560, 11340, 2080, 2260, 8, true); dec(GOLD, 2100, 2115, 11340, 11370, 2080, 2260);
+  // corner stands
+  succulent(-1525, 11680, 125); ball(-1525, 11680, 575); succulent(-1600, 11600, 1025); succulent(-1440, 11760, 1025); cup(-1525, 11680, 1475); succulent(-1525, 11680, 1825);
+  succulent(1915, 11680, 125); stripes(1790, 2040, 11560, 11800, 575, 700, 4, true); succulent(1915, 11680, 1025); ball(1915, 11680, 1475); succulent(1850, 11620, 1825); succulent(1990, 11750, 1825);
+  // framed striped shirt over the headboard
+  dec('#2b2019', -1725, -1695, 9650, 10250, 1250, 2050); dec('#f3f0e8', -1695, -1688, 9690, 10210, 1290, 2010);
+  stripes(-1688, -1680, 9775, 10125, 1400, 1880, 5, true);
+  dec(GARNET, -1688, -1680, 9695, 9775, 1740, 1880); dec(GARNET, -1688, -1680, 10125, 10205, 1740, 1880);
+
+  // Panel mouldings, shown only by themes with base.moulding. Wall plane `at`, panels between from..to (mm), room on the +dir side.
+  var mouldings = [
+    { room: 'bed1', side: 'N', at: -1725, from: 8590, to: 11880, dir: 1, panels: 3 },
+    { room: 'bed2', side: 'W', at: 3760, from: 3315, to: 6965, dir: 1, panels: 3 },
+    { room: 'mbed', side: 'W', at: 9165, from: 3315, to: 7065, dir: 1, panels: 3 },
+    { room: 'living', side: 'W', at: 0, from: 0, to: 4975, dir: 1, panels: 4 }
+  ];
+
   return {
     name: 'Magnolia 3BHK Premium',
     carpetArea: '105.35 m² / 1134 sq ft',
@@ -123,6 +176,6 @@ var PLAN = (function () {
     wallT: 200,       // outer wall thickness, mm — assumed
     eye: 1.6,         // walk-mode eye height, metres
     outside: { height: 78 }, // floor level above the ground, metres — drives the view from the windows
-    rooms: rooms, openings: openings, furniture: F
+    rooms: rooms, openings: openings, furniture: F, decor: DEC, mouldings: mouldings
   };
 })();

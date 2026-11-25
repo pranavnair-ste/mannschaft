@@ -8,7 +8,8 @@
  * sampled from the project photographs (colour quantisation, then assigned to surfaces by eye and
  * corrected for the warm photo lighting). `source` is the page each theme came from.
  *
- * base       — whole-home defaults; optional floorFinish: 'wood' | 'tile' | 'plain'
+ * base       — whole-home defaults; optional floorFinish: 'wood' | 'tile' | 'plain';
+ *              optional moulding: true shows panel mouldings on the feature walls
  * furniture  — placeholder furniture groups
  * rooms      — optional per-room overrides, keyed by room id from plan.js:
  *              { wall, floor, ceiling, walls: { N, E, S, W } }   (walls.* = one accent wall;
@@ -113,5 +114,12 @@ var THEMES = [
     base: { wall: '#f1ede5', wallWet: '#d9d6cf', ceiling: '#faf8f3', floor: '#d8c9b0', floorWet: '#c9c5bd', floorOutdoor: '#a49a8a', trim: '#efe9df', exterior: '#ddd5c7', floorFinish: 'tile' },
     furniture: { wood: '#6e4a30', fabric: '#bdb8b1', accent: '#a87a4e', stone: '#ece6da', cabinet: '#cfccc4', bedding: '#b3c3d6', sanitary: '#ffffff', metal: '#b8913f', dark: '#1f1d1c' },
     rooms: { dining: { walls: { N: '#d7c6a8' } }, mbed: { walls: { W: '#e6d9bf' } } }
+  },
+  { // NOT taken from a studio page (none found for this style): the usual Modern Victorian vocabulary —
+    // panel mouldings, deep navy and green feature walls, walnut floor, brass, velvet, marble
+    id: 'modern-victorian', name: 'Modern Victorian',
+    base: { wall: '#e4dfd4', wallWet: '#e8e6e1', ceiling: '#f6f3ec', floor: '#7a5a3c', floorWet: '#d9d6d0', floorOutdoor: '#8b8478', trim: '#f1ede3', exterior: '#d5cfc3', floorFinish: 'wood', moulding: true },
+    furniture: { wood: '#3f2c1f', fabric: '#2f4a44', accent: '#7b1e3a', stone: '#ece9e2', cabinet: '#26324a', bedding: '#f2eee6', sanitary: '#ffffff', metal: '#b08d3c', dark: '#17171a' },
+    rooms: { living: { walls: { W: '#26324a' } }, dining: { walls: { N: '#2f4a44' } }, bed1: { walls: { N: '#1d2b4a' } }, bed2: { walls: { W: '#2f4a44' } }, mbed: { walls: { W: '#26324a' } } }
   }
 ];

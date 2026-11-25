@@ -54,6 +54,7 @@
       case 'ext': return b.exterior;
       case 'reveal': case 'skirt': return b.trim;
       case 'cap': return '#2a2d30';
+      case 'mould': return colorFor('wall|' + k[1] + '|' + k[2]);
       case 'furn': return k[1] === 'trim' ? b.trim : (theme.furniture[k[1]] || '#999999');
     }
     return '#ff00ff';
@@ -427,6 +428,33 @@
   P.furniture.forEach(function (f) { addBox(furn, f[0], f[3] / 1000, f[4] / 1000, f[1] / 1000, f[2] / 1000, f[5] / 1000, f[6] / 1000, true); });
   scene.add(furn);
 
+  // fixed-colour decor (shown with the furniture) and theme-dependent panel mouldings
+  var decorMats = {}, mould = new THREE.Group(); scene.add(mould);
+  var SHAPES = { box: new THREE.BoxGeometry(1, 1, 1), cyl: new THREE.CylinderGeometry(0.5, 0.5, 1, 20), sph: new THREE.SphereGeometry(0.5, 20, 14) };
+  function unitMesh(shape, material, x0, x1, z0, z1, y0, y1, group) {
+    var m = new THREE.Mesh(SHAPES[shape] || SHAPES.box, material);
+    m.scale.set(Math.abs(x1 - x0), y1 - y0, Math.abs(z1 - z0)); m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+    m.castShadow = m.receiveShadow = true; group.add(m);
+  }
+  (P.decor || []).forEach(function (d) {
+    var brass = d[0] === '#c9a227';
+    var dm = decorMats[d[0]] || (decorMats[d[0]] = new THREE.MeshStandardMaterial({ color: new THREE.Color(d[0]).convertSRGBToLinear(), roughness: brass ? 0.3 : 0.75, metalness: brass ? 0.85 : 0 }));
+    unitMesh(d[7], dm, d[3] / 1000, d[4] / 1000, d[1] / 1000, d[2] / 1000, d[5] / 1000, d[6] / 1000, furn);
+  });
+  (P.mouldings || []).forEach(function (w) {
+    var mm = mat('mould|' + w.room + '|' + w.side), at = w.at / 1000, a0 = w.from / 1000, a1 = w.to / 1000, gap = 0.15, pw = (a1 - a0 - gap * (w.panels + 1)) / w.panels, t = 0.035;
+    function strip(p0, p1, y0, y1, depth) {
+      var q = at + w.dir * depth;
+      if (w.side === 'N' || w.side === 'S') unitMesh('box', mm, p0, p1, at, q, y0, y1, mould); else unitMesh('box', mm, at, q, p0, p1, y0, y1, mould);
+    }
+    strip(a0, a1, 0.94, 0.985, 0.026); // dado rail
+    for (var n = 0; n < w.panels; n++) [[0.16, 0.86], [1.07, H - 0.24]].forEach(function (r) {
+      var p0 = a0 + gap + n * (pw + gap), p1 = p0 + pw;
+      strip(p0, p1, r[0], r[0] + t, 0.018); strip(p0, p1, r[1] - t, r[1], 0.018);
+      strip(p0, p0 + t, r[0], r[1], 0.018); strip(p1 - t, p1, r[0], r[1], 0.018);
+    });
+  });
+
   // door leaves (drawn open at 90°), glazing and window frames
   var glass = new THREE.MeshStandardMaterial({ color: 0xcfe3ea, transparent: true, opacity: 0.16, roughness: 0.03, metalness: 0, side: THREE.DoubleSide, depthWrite: false });
   opens.forEach(function (r) {
@@ -499,6 +527,7 @@
   function applyTheme() {
     Object.keys(mats).forEach(function (key) { mats[key].color.set(colorFor(key)).convertSRGBToLinear(); });
     applyFinish();
+    mould.visible = !!theme.base.moulding;
   }
 
   // ---------- views ----------
